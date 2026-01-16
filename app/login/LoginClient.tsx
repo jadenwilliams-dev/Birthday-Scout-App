@@ -1,31 +1,27 @@
 // app/login/LoginClient.tsx
 "use client";
 
-import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/app/lib/supabaseClient";
 
-const PROFILE_KEY = "bs_profile";
 const ZIP_KEY = "bs_zip";
 const START_KEY = "bs_start";
 const LOC_PROMPT_OFF_KEY = "bs_loc_prompt_off";
-const PROFILE_UPDATED_EVENT = "bs_profile_updated";
 
-type Profile = {
-  birthday: string;
-  zip: string;
-  displayName?: string;
-  avatar?: string;
+type ProfileRow = {
+  user_id: string;
+  display_name: string | null;
+  birthday: string | null; // ISO date string from DB
+  zip: string | null;
+  avatar: string | null;
 };
 
-// Final cleanup (run on submit)
 function clampName(s: string) {
   return s.replace(/\s+/g, " ").trim().slice(0, 24);
 }
 
-// Live typing (DO NOT trim, so spaces work naturally)
 function sanitizeNameInput(s: string) {
   return s.replace(/\s+/g, " ").slice(0, 24);
 }
@@ -34,29 +30,23 @@ function normalizeZip(input: string) {
   return input.replace(/\D/g, "").slice(0, 5);
 }
 
-function readProfile(): Profile | null {
-  try {
-    const raw = localStorage.getItem(PROFILE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") return parsed as Profile;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function writeProfile(p: Profile) {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(p));
-  window.dispatchEvent(new Event(PROFILE_UPDATED_EVENT));
-}
-
 function safeNext(raw: string | null): string {
   const fallback = "/app/deals";
   if (!raw) return fallback;
   if (!raw.startsWith("/")) return fallback;
   if (raw === "/app" || raw.startsWith("/app?")) return "/app/deals";
   return raw;
+}
+
+async function upsertProfileForUser(userId: string, patch: Partial<ProfileRow>) {
+  const payload: any = {
+    user_id: userId,
+    ...patch,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "user_id" });
+  if (error) throw error;
 }
 
 export default function LoginClient() {
@@ -68,7 +58,7 @@ export default function LoginClient() {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
 
-  const [name, setName] = useState(""); // only used in signup UI
+  const [name, setName] = useState("");
   const [mode, setMode] = useState<"login" | "signup">("login");
 
   const [busy, setBusy] = useState(false);
@@ -86,24 +76,6 @@ export default function LoginClient() {
   function goNext() {
     router.replace(nextPath);
     router.refresh();
-  }
-
-  function ensureNameSaved(displayName: string) {
-    const existing = readProfile() || { birthday: "", zip: "" };
-
-    const zipFallback = normalizeZip(
-      (existing.zip || localStorage.getItem(ZIP_KEY) || "").toString()
-    );
-
-    const next: Profile = {
-      ...existing,
-      zip: zipFallback,
-      displayName,
-      avatar: existing.avatar || "sparkle",
-    };
-
-    writeProfile(next);
-    if (zipFallback) localStorage.setItem(ZIP_KEY, zipFallback);
   }
 
   function shouldPromptForLocation(): boolean {
@@ -133,10 +105,7 @@ export default function LoginClient() {
     if (!pw || pw.length < 6) return setErr("Enter a password (min 6 chars).");
 
     const cleanName = clampName(name);
-
-    if (mode === "signup" && !cleanName) {
-      return setErr("Enter your name.");
-    }
+    if (mode === "signup" && !cleanName) return setErr("Enter your name.");
 
     setBusy(true);
     try {
@@ -150,25 +119,44 @@ export default function LoginClient() {
 
         // If email confirmation is enabled, no session yet.
         if (!data.session) {
-          ensureNameSaved(cleanName);
           setErr("Check your email to confirm your account, then come back and log in.");
           return;
         }
 
-        await supabase.auth.getSession();
-        ensureNameSaved(cleanName);
+        // Session exists: write profile row
+        const userId = data.session.user.id;
+
+        const zipFallback = normalizeZip(
+          (localStorage.getItem(ZIP_KEY) || "").toString()
+        );
+
+        await upsertProfileForUser(userId, {
+          display_name: cleanName,
+          zip: zipFallback || null,
+          avatar: "sparkle",
+        });
+
         afterAuthSuccess();
         return;
       }
 
-      // LOGIN (no name asked)
-      const { error } = await supabase.auth.signInWithPassword({
+      // LOGIN
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password: pw,
       });
       if (error) throw error;
 
-      await supabase.auth.getSession();
+      const userId = data.user?.id;
+      if (!userId) throw new Error("Login succeeded but user id missing.");
+
+      // Optional: if user never had a profile row, create one
+      // (keeps existing DB values if they already exist)
+      const zipFallback = normalizeZip((localStorage.getItem(ZIP_KEY) || "").toString());
+      await upsertProfileForUser(userId, {
+        zip: zipFallback || null,
+      });
+
       afterAuthSuccess();
     } catch (e: any) {
       setErr(e?.message || (mode === "signup" ? "Sign up failed." : "Login failed."));
@@ -217,7 +205,7 @@ export default function LoginClient() {
     );
   }
 
-  // ---------- styles (match your Deals glass) ----------
+  // ---------- styles (unchanged) ----------
   const panel =
     "relative rounded-[28px] border border-white/10 " +
     "bg-[linear-gradient(180deg,rgba(255,255,255,0.085)_0%,rgba(255,255,255,0.03)_42%,rgba(0,0,0,0.28)_100%)] " +
@@ -242,9 +230,8 @@ export default function LoginClient() {
 
   return (
     <main className="relative min-h-screen overflow-x-hidden text-white">
-      {/* ✅ BACKGROUND — copied EXACTLY from Deals */}
+      {/* background */}
       <div className="pointer-events-none fixed inset-0 z-0">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/bg-stars.png"
           alt=""
@@ -258,7 +245,6 @@ export default function LoginClient() {
         />
       </div>
 
-      {/* ✅ OVERLAYS — copied EXACTLY from Deals */}
       <div className="pointer-events-none fixed inset-0 z-10">
         <div className="absolute inset-0 bg-black/20" />
         <div className="absolute inset-0 bg-[radial-gradient(1100px_760px_at_50%_18%,rgba(0,0,0,0.00)_0%,rgba(0,0,0,0.18)_55%,rgba(0,0,0,0.45)_100%)]" />
@@ -318,10 +304,8 @@ export default function LoginClient() {
       {/* CONTENT */}
       <div className="relative z-20 mx-auto flex min-h-screen max-w-6xl items-center justify-center px-4 py-14">
         <div className="w-full max-w-md">
-          {/* Logo */}
           <div className="-mb-16 flex items-center justify-center">
             <Link href="/app/deals" aria-label="BirthdayScout" className="inline-flex select-none">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="/brands/longlogo1.png"
                 alt="BirthdayScout"
@@ -331,7 +315,6 @@ export default function LoginClient() {
             </Link>
           </div>
 
-          {/* Card */}
           <div className={`${panel} p-6`}>
             <div className="pointer-events-none absolute left-1/2 top-[-1px] h-px w-[92%] -translate-x-1/2 rounded-full bg-emerald-300/25" />
             <div className="pointer-events-none absolute left-1/2 top-[-1px] h-[22px] w-[92%] -translate-x-1/2 rounded-full bg-emerald-400/10 blur-2xl" />

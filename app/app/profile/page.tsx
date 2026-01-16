@@ -4,16 +4,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/app/lib/supabaseClient";
 
-type Profile = {
-  birthday: string;
-  zip: string;
-  displayName?: string;
-};
-
-const PROFILE_KEY = "bs_profile";
 const ZIP_KEY = "bs_zip";
 const START_MODE_KEY = "bs_start_mode"; // "geo" | "zip"
-const PROFILE_UPDATED_EVENT = "bs_profile_updated";
 const DEFAULT_ZIP = "11111";
 
 function normalizeZip(input: string) {
@@ -32,29 +24,7 @@ function isTodayISO(isoDate: string) {
   return now.getMonth() + 1 === m && now.getDate() === d;
 }
 
-function readProfile(): Profile {
-  try {
-    const raw = localStorage.getItem(PROFILE_KEY);
-    if (!raw) return { birthday: "", zip: DEFAULT_ZIP };
-    const p = JSON.parse(raw);
-    return {
-      birthday: typeof p.birthday === "string" ? p.birthday : "",
-      zip: typeof p.zip === "string" && p.zip ? p.zip : DEFAULT_ZIP,
-      displayName: typeof p.displayName === "string" ? p.displayName : "",
-    };
-  } catch {
-    return { birthday: "", zip: DEFAULT_ZIP };
-  }
-}
-
-function writeProfile(p: Profile) {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(p));
-  if (p.zip) localStorage.setItem(ZIP_KEY, p.zip);
-  window.dispatchEvent(new Event(PROFILE_UPDATED_EVENT));
-}
-
 // ---------- copied look pieces from Plan page ----------
-
 function IconDot({ on }: { on: boolean }) {
   return (
     <span
@@ -67,11 +37,10 @@ function IconDot({ on }: { on: boolean }) {
 
 /**
  * HERO LOGO (lockup) — same as Plan page.
- * Uses your actual file path first: /public/brands/lockup.png
  */
 function BrandLockup() {
   const candidates = [
-    "/brands/lockup.png", // ✅ your actual file location
+    "/brands/lockup.png",
     "/lockup.png",
     "/brand-lockup.png",
     "/brand-lockup.webp",
@@ -85,7 +54,6 @@ function BrandLockup() {
 
   return (
     <div className="-mt-31 mb-6 -ml-2 sm:-ml-3">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={candidates[idx]}
         alt="BirthdayScout"
@@ -119,28 +87,46 @@ export default function ProfilePage() {
 
   const [panel, setPanel] = useState<EditPanel>("none");
 
+  // ✅ Load user + DB profile
   useEffect(() => {
-    const p = readProfile();
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const user = data.user;
+        if (!user) {
+          setErr("Not logged in.");
+          return;
+        }
 
-    const storedZip = localStorage.getItem(ZIP_KEY) || "";
-    const z = p.zip || storedZip || DEFAULT_ZIP;
+        setEmail(user.email || "");
 
-    setDisplayName(p.displayName || "");
-    setBirthday(p.birthday || "");
-    setZip(z);
+        const { data: p, error } = await supabase
+          .from("profiles")
+          .select("display_name,birthday,zip")
+          .eq("user_id", user.id)
+          .maybeSingle();
 
-    const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
-    setStartMode(mode);
+        if (error) throw error;
 
-    // init drafts
-    setDraftName(p.displayName || "");
-    setDraftBirthday(p.birthday || "");
-    setDraftZip(z);
-    setDraftStartMode(mode);
+        const storedZip = localStorage.getItem(ZIP_KEY) || "";
+        const z = (typeof p?.zip === "string" && p.zip) ? p.zip : (storedZip || DEFAULT_ZIP);
 
-    supabase.auth.getUser().then(({ data }) => {
-      setEmail(data.user?.email || "");
-    });
+        const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
+
+        setDisplayName((p?.display_name as string) || "");
+        setBirthday((p?.birthday as string) || "");
+        setZip(z);
+        setStartMode(mode);
+
+        // init drafts
+        setDraftName((p?.display_name as string) || "");
+        setDraftBirthday((p?.birthday as string) || "");
+        setDraftZip(z);
+        setDraftStartMode(mode);
+      } catch (e: any) {
+        setErr(e?.message || "Failed to load profile.");
+      }
+    })();
   }, []);
 
   const birthdayIsToday = useMemo(() => isTodayISO(birthday), [birthday]);
@@ -178,7 +164,6 @@ export default function ProfilePage() {
 
   function openPanel(next: EditPanel) {
     setErr("");
-    // refresh drafts from current saved values
     setDraftName(displayName);
     setDraftBirthday(birthday);
     setDraftZip(zip);
@@ -188,7 +173,6 @@ export default function ProfilePage() {
 
   function cancelPanel() {
     setErr("");
-    // revert drafts (not strictly needed, but keeps things predictable)
     setDraftName(displayName);
     setDraftBirthday(birthday);
     setDraftZip(zip);
@@ -211,7 +195,26 @@ export default function ProfilePage() {
     return "";
   }
 
-  function applySave(which: EditPanel) {
+  async function saveToDB(next: { display_name: string; birthday: string; zip: string }) {
+    const { data } = await supabase.auth.getUser();
+    const user = data.user;
+    if (!user) throw new Error("Not logged in.");
+
+    const { error } = await supabase.from("profiles").upsert(
+      {
+        user_id: user.id,
+        display_name: next.display_name,
+        birthday: next.birthday || null,
+        zip: next.zip || null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" }
+    );
+
+    if (error) throw error;
+  }
+
+  async function applySave(which: EditPanel) {
     setErr("");
 
     const name = clampName(draftName);
@@ -219,7 +222,6 @@ export default function ProfilePage() {
     const z = normalizeZip(draftZip) || DEFAULT_ZIP;
     const mode = draftStartMode;
 
-    // validations based on what you're saving
     const v =
       which === "all"
         ? validateDrafts({ name: true, birthday: true, zip: true })
@@ -230,7 +232,7 @@ export default function ProfilePage() {
         : which === "zip"
         ? validateDrafts({ zip: true })
         : which === "start"
-        ? "" // no validation
+        ? ""
         : "";
 
     if (v) {
@@ -238,48 +240,49 @@ export default function ProfilePage() {
       return;
     }
 
-    // build next saved profile
-    const nextProfile: Profile = {
-      displayName: which === "birthday" || which === "zip" || which === "start" ? displayName : name,
-      birthday: which === "name" || which === "zip" || which === "start" ? birthday : bday,
-      zip: which === "name" || which === "birthday" || which === "start" ? zip : z,
-    };
+    const nextDisplay =
+      which === "birthday" || which === "zip" || which === "start" ? displayName : name;
+    const nextBirthday =
+      which === "name" || which === "zip" || which === "start" ? birthday : bday;
+    const nextZip =
+      which === "name" || which === "birthday" || which === "start" ? zip : z;
 
-    // if saving "all", use everything
-    if (which === "all") {
-      nextProfile.displayName = name;
-      nextProfile.birthday = bday;
-      nextProfile.zip = z;
+    const finalDisplay = which === "all" ? name : nextDisplay;
+    const finalBirthday = which === "all" ? bday : nextBirthday;
+    const finalZip = which === "all" ? z : nextZip;
+
+    try {
+      // Persist start mode locally (preference)
+      localStorage.setItem(START_MODE_KEY, mode);
+
+      // Keep ZIP cache locally for other pages that might still read ZIP_KEY
+      localStorage.setItem(ZIP_KEY, finalZip);
+
+      // ✅ Save profile per-user
+      await saveToDB({
+        display_name: finalDisplay || "",
+        birthday: finalBirthday || "",
+        zip: finalZip || DEFAULT_ZIP,
+      });
+
+      // Update UI state
+      setDisplayName(finalDisplay || "");
+      setBirthday(finalBirthday || "");
+      setZip(finalZip || DEFAULT_ZIP);
+      setStartMode(mode);
+
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1400);
+      setPanel("none");
+    } catch (e: any) {
+      setErr(e?.message || "Failed to save profile.");
     }
-
-    // if saving only start mode, profile values stay but mode changes
-    if (which === "start") {
-      nextProfile.displayName = displayName;
-      nextProfile.birthday = birthday;
-      nextProfile.zip = zip;
-    }
-
-    // persist
-    writeProfile(nextProfile);
-    localStorage.setItem(START_MODE_KEY, mode);
-
-    // update UI state
-    setDisplayName(nextProfile.displayName || "");
-    setBirthday(nextProfile.birthday || "");
-    setZip(nextProfile.zip || DEFAULT_ZIP);
-    setStartMode(mode);
-
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1400);
-
-    setPanel("none");
   }
 
   return (
     <main className="relative min-h-screen overflow-x-hidden text-white">
-      {/* BACKGROUND (exactly like Plan page) */}
+      {/* BACKGROUND */}
       <div className="pointer-events-none fixed inset-0 z-0">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/bg-stars.png"
           alt=""
@@ -293,7 +296,7 @@ export default function ProfilePage() {
         />
       </div>
 
-      {/* OVERLAYS (exactly like Plan page) */}
+      {/* OVERLAYS */}
       <div className="pointer-events-none fixed inset-0 z-10">
         <div className="absolute inset-0 bg-black/10" />
         <div className="absolute inset-0 bg-[radial-gradient(1100px_760px_at_50%_18%,rgba(0,0,0,0.00)_0%,rgba(0,0,0,0.12)_55%,rgba(0,0,0,0.34)_100%)]" />
@@ -308,11 +311,9 @@ export default function ProfilePage() {
 
       {/* CONTENT */}
       <div className="relative z-20 px-6 pt-0 pb-[130px]">
-        {/* header offset (matches Plan page) */}
         <div className="h-[72px]" />
 
         <div className={NARROW}>
-          {/* Header / hero (logo placement copied from Plan page) */}
           <header className="mb-8">
             <BrandLockup />
 
@@ -330,9 +331,7 @@ export default function ProfilePage() {
             </div>
           </header>
 
-          {/* Main card */}
           <section className={`${GlassSection} max-w-[980px] mx-auto`}>
-            {/* Header */}
             <div className="px-6 py-5 border-b border-white/12 flex items-center justify-between">
               <div>
                 <div className="text-[11px] uppercase tracking-wider text-zinc-500">Profile</div>
@@ -340,18 +339,14 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            {/* Content */}
             <div className="p-6">
               <div className="relative rounded-[26px] border border-white/14 bg-black/45 backdrop-blur-xl shadow-[0_18px_70px_rgba(0,0,0,0.55)] p-6">
-                {/* Top row */}
                 <div className="flex items-center justify-between gap-6">
                   <div className="flex items-center gap-4 min-w-0">
-                    {/* Avatar */}
                     <div className="h-14 w-14 rounded-full bg-emerald-400/20 border border-emerald-200/30 flex items-center justify-center text-xl font-semibold text-emerald-100 shadow-[0_0_30px_rgba(16,185,129,0.35)]">
                       {displayName?.[0]?.toUpperCase() || "?"}
                     </div>
 
-                    {/* Name + email */}
                     <div className="min-w-0">
                       <div className="text-lg font-semibold truncate">{displayName || "Your name"}</div>
                       <div className="text-sm text-zinc-400 truncate">{email || "—"}</div>
@@ -368,12 +363,9 @@ export default function ProfilePage() {
                   </button>
                 </div>
 
-                {/* Divider */}
                 <div className="my-6 h-px bg-white/10" />
 
-                {/* Rows */}
                 <div className="space-y-4">
-                  {/* Birthday */}
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
                       <span className="text-lg">🎂</span>
@@ -388,7 +380,6 @@ export default function ProfilePage() {
                     </button>
                   </div>
 
-                  {/* ZIP */}
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
                       <span className="text-lg">📍</span>
@@ -402,7 +393,6 @@ export default function ProfilePage() {
                     </button>
                   </div>
 
-                  {/* Route start */}
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
                       <span className="text-lg">🧭</span>
@@ -419,7 +409,6 @@ export default function ProfilePage() {
                   </div>
                 </div>
 
-                {/* Footer */}
                 <div className="mt-6 flex items-center gap-2 text-sm text-emerald-200">
                   <span className="h-4 w-4 rounded-full bg-emerald-400/25 flex items-center justify-center text-xs">✓</span>
                   {profileComplete ? "All set! Your profile is fully completed." : "Finish setup to complete your profile."}
@@ -434,7 +423,7 @@ export default function ProfilePage() {
             </div>
           </section>
 
-          {/* EDIT PANEL (modal) */}
+          {/* EDIT MODAL */}
           {panel !== "none" ? (
             <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/70 p-4">
               <div className="w-full max-w-xl rounded-2xl border border-white/12 bg-black/70 backdrop-blur-xl shadow-[0_30px_120px_rgba(0,0,0,0.85)]">
@@ -450,7 +439,7 @@ export default function ProfilePage() {
                       ? "Edit ZIP"
                       : "Edit route start"}
                   </div>
-                  <div className="text-sm text-zinc-400">Changes are stored locally on this device.</div>
+                  <div className="text-sm text-zinc-400">Changes are stored to your account.</div>
                 </div>
 
                 <div className="p-5 space-y-5">
@@ -459,7 +448,7 @@ export default function ProfilePage() {
                       <label className="text-sm text-zinc-200">Display name</label>
                       <input
                         value={draftName}
-                        onChange={(e) => setDraftName(clampName(e.target.value))}
+                        onChange={(e) => setDraftName(e.target.value)}
                         className={Field}
                         placeholder="Jaden"
                       />
@@ -528,10 +517,7 @@ export default function ProfilePage() {
                   <button onClick={cancelPanel} className={BtnCancel}>
                     Cancel
                   </button>
-                  <button
-                    onClick={() => applySave(panel)}
-                    className={BtnSave}
-                  >
+                  <button onClick={() => applySave(panel)} className={BtnSave}>
                     Save
                   </button>
                 </div>

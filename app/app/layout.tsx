@@ -1,3 +1,4 @@
+// app/app/layout.tsx
 "use client";
 
 import Link from "next/link";
@@ -5,10 +6,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import SignOutButton from "@/app/SignOutButton";
 import { supabase } from "@/app/lib/supabaseClient";
-
-const AUTH_KEY = "bs_auth";
-const PROFILE_KEY = "bs_profile";
-const PROFILE_UPDATED_EVENT = "bs_profile_updated";
 
 function NavLink({ href, label }: { href: string; label: string }) {
   const pathname = usePathname();
@@ -34,23 +31,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [displayName, setDisplayName] = useState("");
 
-  // ✅ AUTH GUARD (Supabase-first)
+  // ✅ AUTH GUARD (Supabase only)
   useEffect(() => {
     let cancelled = false;
 
     async function checkAuth() {
       try {
-        // 1) Supabase session
         const { data } = await supabase.auth.getSession();
         const hasSession = !!data?.session;
 
-        // 2) Optional fallback to your local key (if you still want it)
-        let hasLocal = false;
-        try {
-          hasLocal = localStorage.getItem(AUTH_KEY) === "1";
-        } catch {}
-
-        if (!hasSession && !hasLocal) {
+        if (!hasSession) {
           router.replace("/login");
           return;
         }
@@ -63,35 +53,49 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     checkAuth();
 
+    // Also react to auth changes (login/logout)
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) router.replace("/login");
+    });
+
     return () => {
       cancelled = true;
+      sub.subscription.unsubscribe();
     };
   }, [router]);
 
+  // ✅ Load name from DB profile (per-user)
   useEffect(() => {
-    function loadProfile() {
+    let alive = true;
+
+    async function loadName() {
       try {
-        const raw = localStorage.getItem(PROFILE_KEY);
-        if (!raw) {
-          setDisplayName("");
+        const { data } = await supabase.auth.getUser();
+        const user = data.user;
+        if (!user) {
+          if (alive) setDisplayName("");
           return;
         }
-        const p = JSON.parse(raw);
-        setDisplayName(typeof p?.displayName === "string" ? p.displayName : "");
+
+        const { data: p, error } = await supabase
+          .from("profiles")
+          .select("display_name")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (alive) setDisplayName((p?.display_name as string) || "");
       } catch {
-        setDisplayName("");
+        if (alive) setDisplayName("");
       }
     }
 
-    loadProfile();
-
-    const handler = () => loadProfile();
-    window.addEventListener(PROFILE_UPDATED_EVENT, handler);
-    window.addEventListener("storage", handler);
+    loadName();
+    const { data: sub } = supabase.auth.onAuthStateChange(() => loadName());
 
     return () => {
-      window.removeEventListener(PROFILE_UPDATED_EVENT, handler);
-      window.removeEventListener("storage", handler);
+      alive = false;
+      sub.subscription.unsubscribe();
     };
   }, []);
 
@@ -110,6 +114,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-black text-white overflow-x-hidden overflow-y-visible">
+      {/* FLOATING HEADER */}
       <header className="fixed top-0 inset-x-0 z-50 bg-transparent">
         <div className="mx-auto max-w-[1200px] px-6 pt-6 flex items-center justify-end gap-2">
           <nav className="flex items-center gap-1">
@@ -124,6 +129,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
+      {/* CONTENT */}
       <main className="relative min-h-screen pt-20 overflow-y-visible">
         {children}
       </main>

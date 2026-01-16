@@ -1,3 +1,4 @@
+// app/SignOutButton.tsx
 "use client";
 
 import { useRouter } from "next/navigation";
@@ -13,14 +14,21 @@ export default function SignOutButton() {
     setBusy(true);
 
     try {
-      // End Supabase session (middleware will see logged-out state)
       await supabase.auth.signOut();
     } catch {
-      // ignore errors, still redirect
+      // ignore errors
     }
 
-    // IMPORTANT: do NOT clear localStorage
-    // This is what preserves name / birthday / zip
+    // ✅ Clear user-specific cached keys so another user on same browser doesn't see your data
+    try {
+      localStorage.removeItem("bs_profile");
+      localStorage.removeItem("bs_plan");
+      localStorage.removeItem("bs_claimed");
+      // keep these if you want:
+      // localStorage.removeItem("bs_start");
+      // localStorage.removeItem("bs_loc_prompt_off");
+      // localStorage.removeItem("bs_zip");
+    } catch {}
 
     router.replace("/login");
     router.refresh();
