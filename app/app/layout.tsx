@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import SignOutButton from "@/app/SignOutButton";
+import { supabase } from "@/app/lib/supabaseClient";
 
 const AUTH_KEY = "bs_auth";
 const PROFILE_KEY = "bs_profile";
@@ -33,21 +34,38 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [displayName, setDisplayName] = useState("");
 
-  // ✅ run once on mount; don't depend on pathname
+  // ✅ AUTH GUARD (Supabase-first)
   useEffect(() => {
-    let authed = false;
-    try {
-      authed = localStorage.getItem(AUTH_KEY) === "1";
-    } catch {
-      authed = false;
+    let cancelled = false;
+
+    async function checkAuth() {
+      try {
+        // 1) Supabase session
+        const { data } = await supabase.auth.getSession();
+        const hasSession = !!data?.session;
+
+        // 2) Optional fallback to your local key (if you still want it)
+        let hasLocal = false;
+        try {
+          hasLocal = localStorage.getItem(AUTH_KEY) === "1";
+        } catch {}
+
+        if (!hasSession && !hasLocal) {
+          router.replace("/login");
+          return;
+        }
+
+        if (!cancelled) setReady(true);
+      } catch {
+        router.replace("/login");
+      }
     }
 
-    if (!authed) {
-      router.replace("/login");
-      return;
-    }
+    checkAuth();
 
-    setReady(true);
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   useEffect(() => {
@@ -82,7 +100,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return n ? `Hey, ${n}` : "Hey";
   }, [displayName]);
 
-  // ✅ don't return null (this is what made it look "gone")
   if (!ready) {
     return (
       <div className="min-h-screen bg-black text-white grid place-items-center">
@@ -93,7 +110,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-black text-white overflow-x-hidden overflow-y-visible">
-      {/* FLOATING HEADER */}
       <header className="fixed top-0 inset-x-0 z-50 bg-transparent">
         <div className="mx-auto max-w-[1200px] px-6 pt-6 flex items-center justify-end gap-2">
           <nav className="flex items-center gap-1">
@@ -108,7 +124,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      {/* CONTENT — header-safe but overflow-friendly */}
       <main className="relative min-h-screen pt-20 overflow-y-visible">
         {children}
       </main>
