@@ -1,8 +1,9 @@
+// app/login/LoginClient.tsx
 "use client";
 
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
 import Link from "next/link";
 import { supabase } from "@/app/lib/supabaseClient";
 
@@ -121,7 +122,7 @@ export default function LoginClient() {
     goNext();
   }
 
-  async function onContinue(e: FormEvent) {
+  async function onContinue(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
 
