@@ -30,23 +30,25 @@ function NavLink({ href, label }: { href: string; label: string }) {
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const pathname = usePathname();
   const [ready, setReady] = useState(false);
   const [displayName, setDisplayName] = useState("");
 
+  // ✅ run once on mount; don't depend on pathname
   useEffect(() => {
+    let authed = false;
     try {
-      const authed = localStorage.getItem(AUTH_KEY) === "1";
-      if (!authed) {
-        router.replace("/login");
-        return;
-      }
+      authed = localStorage.getItem(AUTH_KEY) === "1";
     } catch {
+      authed = false;
+    }
+
+    if (!authed) {
       router.replace("/login");
       return;
     }
+
     setReady(true);
-  }, [router, pathname]);
+  }, [router]);
 
   useEffect(() => {
     function loadProfile() {
@@ -80,7 +82,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return n ? `Hey, ${n}` : "Hey";
   }, [displayName]);
 
-  if (!ready) return null;
+  // ✅ don't return null (this is what made it look "gone")
+  if (!ready) {
+    return (
+      <div className="min-h-screen bg-black text-white grid place-items-center">
+        <div className="text-zinc-300 text-sm">Loading…</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-black text-white overflow-x-hidden overflow-y-visible">
