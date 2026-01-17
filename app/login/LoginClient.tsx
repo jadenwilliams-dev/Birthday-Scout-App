@@ -119,7 +119,7 @@ export default function LoginClient() {
 
         // If email confirmation is enabled, no session yet.
         if (!data.session) {
-          setErr("Check your email to confirm your account, then come back and log in.");
+          setErr("Check your email to confirm your account. If you don’t see it, check Spam or Promotions, then come back and log in.");
           return;
         }
 
