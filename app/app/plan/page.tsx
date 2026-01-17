@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { ALL_DEALS } from "@/app/lib/deals";
 import OpenRouteButton from "./OpenRouteButton";
 
@@ -345,47 +346,34 @@ function RailNode({ variant }: { variant: "start" | "next" | "claimed" | "skippe
 
 /**
  * HERO LOGO (lockup) — matches your inspo.
- *
- * Put your lockup file in /public as ONE of these:
- * - /brand-lockup.png  (recommended)
- * - /brand-lockup.webp
- * - /logo-lockup.png
- * - /logo.png
- *
- * This component will auto-fallback through the list.
  */
 function BrandLockup() {
   const candidates = [
-  "/brands/lockup.png",     // ✅ your actual file location
-  "/lockup.png",            // optional fallback if you move it later
-  "/brand-lockup.png",
-  "/brand-lockup.webp",
-  "/brand-lockup.jpg",
-  "/logo-lockup.png",
-  "/logo.png",
-];
-
+    "/brands/lockup.png",
+    "/lockup.png",
+    "/brand-lockup.png",
+    "/brand-lockup.webp",
+    "/brand-lockup.jpg",
+    "/logo-lockup.png",
+    "/logo.png",
+  ];
 
   const [idx, setIdx] = useState(0);
 
   if (idx >= candidates.length) return null;
 
-return (
-<div className="-mt-31 mb-6 -ml-2 sm:-ml-3">
-
-    {/* eslint-disable-next-line @next/next/no-img-element */}
-    <img
-  src={candidates[idx]}
-  alt="BirthdayScout"
-  className="block h-[300px] sm:h-[360px] w-auto select-none drop-shadow-[0_28px_70px_rgba(0,0,0,0.70)]"
-  draggable={false}
-  onError={() => setIdx((v) => v + 1)}
-/>
-
-  </div>
-);
-
-
+  return (
+    <div className="-mt-31 mb-6 -ml-2 sm:-ml-3">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={candidates[idx]}
+        alt="BirthdayScout"
+        className="block h-[300px] sm:h-[360px] w-auto select-none drop-shadow-[0_28px_70px_rgba(0,0,0,0.70)]"
+        draggable={false}
+        onError={() => setIdx((v) => v + 1)}
+      />
+    </div>
+  );
 }
 
 export default function PlanPage() {
@@ -496,6 +484,9 @@ export default function PlanPage() {
     return items.filter((d) => !skippedSet.has(d.id));
   }, [items, skippedSet]);
 
+  // ✅ EMPTY STATE FLAG
+  const hasAnyPlanned = items.length > 0;
+
   const claimedCount = useMemo(() => {
     const set = new Set(claimedIds);
     return planIds.filter((id) => set.has(id)).length;
@@ -505,7 +496,6 @@ export default function PlanPage() {
   const progressPct = Math.min(100, Math.max(0, pct));
   const glowT = progressPct / 100;
 
-  // glow grows as progress grows
   const progShadow = `0 0 ${12 + 34 * glowT}px rgba(16,185,129,${0.14 + 0.38 * glowT}),
                     0 0 ${5 + 16 * glowT}px rgba(16,185,129,${0.24 + 0.52 * glowT})`;
 
@@ -630,7 +620,6 @@ export default function PlanPage() {
       const nextStop2 = computeNextStop(set);
       if (nextStop2) {
         setStatus(`Claimed ✅ Next stop: ${nextStop2.name}`);
-        if (autoOpenMaps) openStopInMaps(nextStop2);
       } else {
         setStatus("Claimed ✅ No next stop — everything is claimed or skipped 🎉");
       }
@@ -866,16 +855,6 @@ export default function PlanPage() {
     await fetchPreviewAndOpenModal();
   }
 
-  function confirmDestinationAndOptimize() {
-    const chosen = modalChoice || "";
-    if (chosen) {
-      setDestinationId(chosen);
-      localStorage.setItem(DEST_KEY, chosen);
-    }
-    setShowDestModal(false);
-    doOptimize(chosen);
-  }
-
   const routeLine = useMemo(() => {
     if (!lastRouteDurationS && !lastRouteDistanceM) return null;
 
@@ -966,18 +945,15 @@ export default function PlanPage() {
   }));
 
   // ======= aesthetics =======
-  // a touch wider like your inspo mock
   const NARROW = "mx-auto w-full max-w-[1200px]";
 
-  // teal glass vibe
   const GlassSection =
     "relative rounded-[28px] border border-white/14 bg-black/30 " +
     "shadow-[0_24px_90px_rgba(0,0,0,0.60)]";
 
   const GlassCard =
-  "relative rounded-[26px] border border-white/14 bg-black/44 backdrop-blur-xl " +
-  "shadow-[0_18px_70px_rgba(0,0,0,0.55)]";
-
+    "relative rounded-[26px] border border-white/14 bg-black/44 backdrop-blur-xl " +
+    "shadow-[0_18px_70px_rgba(0,0,0,0.55)]";
 
   const NeonRim =
     "relative " +
@@ -1002,6 +978,13 @@ export default function PlanPage() {
     "shadow-[0_0_0_1px_rgba(16,185,129,0.14),0_18px_54px_rgba(0,0,0,0.62),0_0_34px_rgba(16,185,129,0.26)] " +
     "transition";
 
+  const EmptyPrimaryBtn =
+    "inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-200/22 px-5 py-3 text-[15px] font-medium text-emerald-50 " +
+    "bg-[linear-gradient(180deg,rgba(16,185,129,0.46)_0%,rgba(16,185,129,0.26)_55%,rgba(0,0,0,0.10)_100%)] " +
+    "hover:bg-[linear-gradient(180deg,rgba(16,185,129,0.54)_0%,rgba(16,185,129,0.30)_55%,rgba(0,0,0,0.12)_100%)] " +
+    "shadow-[0_0_0_1px_rgba(16,185,129,0.12),0_18px_54px_rgba(0,0,0,0.62),0_0_34px_rgba(16,185,129,0.20)] " +
+    "transition";
+
   return (
     <main className="relative min-h-screen overflow-x-hidden text-white">
       {/* BACKGROUND */}
@@ -1020,15 +1003,10 @@ export default function PlanPage() {
         />
       </div>
 
-      {/* OVERLAYS (match inspo: brighter, less “dim”) */}
+      {/* OVERLAYS */}
       <div className="pointer-events-none fixed inset-0 z-10">
-        {/* lighter global dim */}
         <div className="absolute inset-0 bg-black/10" />
-
-        {/* softer vignette */}
         <div className="absolute inset-0 bg-[radial-gradient(1100px_760px_at_50%_18%,rgba(0,0,0,0.00)_0%,rgba(0,0,0,0.12)_55%,rgba(0,0,0,0.34)_100%)]" />
-
-        {/* subtle texture */}
         <div
           className="absolute inset-0 opacity-[0.035] mix-blend-overlay"
           style={{
@@ -1039,118 +1017,34 @@ export default function PlanPage() {
       </div>
 
       {/* CONTENT */}
-<div className="relative z-20 px-6 pt-0 pb-[190px]">
-  {/* header offset */}
-  <div className="h-[72px]" />
+      <div className="relative z-20 px-6 pt-0 pb-[190px]">
+        <div className="h-[72px]" />
         <div className={NARROW}>
-          {/* Header / hero (logo lockup + hero text like inspo) */}
+          {/* Header / hero */}
           <header className="mb-8">
-  {/* BIG LOGO (this is what your inspo has) */}
-  <BrandLockup />
+            <BrandLockup />
 
-  {/* ✅ Move pill + title + subtitle to the right */}
-<div className="pl-10 lg:pl-30 -mt-24">
-
-    <div className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-black/35 px-3 py-1 text-xs text-zinc-300">
-      <IconDot on={hasGPSStart || !!zip.trim()} />
-      Trip builder
-    </div>
-
-    <h1 className="mt-2 text-[46px] leading-[1.03] font-semibold tracking-tight">
-      Your birthday route
-    </h1>
-
-    <p className="mt-2 max-w-[640px] text-[19px] leading-snug text-zinc-300/90">
-      Plan stops, skip what you don’t want today, and
-      <br className="hidden sm:block" /> open the optimized route in Maps.
-    </p>
-  </div>
-</header>
-
-
-          {/* Destination picker modal */}
-          {showDestModal ? (
-            <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/70 p-4">
-              <div className="w-full max-w-lg rounded-2xl border border-white/12 bg-black/70 p-5 shadow-[0_30px_120px_rgba(0,0,0,0.85)]">
-                <div className="text-lg font-bold mb-1">Pick your final stop</div>
-                <div className="text-sm text-zinc-400 mb-4">We’ll optimize the route and end at the stop you choose.</div>
-
-                <div className="max-h-72 overflow-auto rounded-xl border border-white/12 bg-black/30">
-                  {activeItems.map((d) => {
-                    const miles = modalDistances[d.id];
-                    const eta = modalEtas[d.id];
-
-                    const milesText =
-                      typeof miles === "number" && isFinite(miles) ? `${miles.toFixed(1)} mi` : "—";
-                    const etaText = typeof eta === "number" && isFinite(eta) ? `${eta} min` : "";
-
-                    return (
-                      <label
-                        key={d.id}
-                        className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/8 last:border-b-0 cursor-pointer hover:bg-white/5"
-                      >
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="radio"
-                            name="dest"
-                            value={d.id}
-                            checked={modalChoice === d.id}
-                            onChange={() => setModalChoice(d.id)}
-                          />
-                          <BrandAvatar deal={d} size={34} />
-                          <div className="flex flex-col">
-                            <span className="text-sm text-white">{d.name}</span>
-                            <span className="text-xs text-zinc-500">{d.city ? d.city : "Las Vegas"}</span>
-                          </div>
-                        </div>
-
-                        <div className="text-right">
-                          <div className="text-xs text-zinc-200">{etaText || milesText}</div>
-                          {etaText ? <div className="text-[11px] text-zinc-500">{milesText}</div> : null}
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                <label className="mt-4 flex items-center gap-2 text-sm text-zinc-300">
-                  <input
-                    type="checkbox"
-                    checked={promptOff}
-                    onChange={(e) => {
-                      const v = e.target.checked;
-                      setPromptOff(v);
-                      writeBool(DEST_PROMPT_OFF_KEY, v);
-                    }}
-                  />
-                  Don’t ask again
-                </label>
-
-                <div className="mt-4 flex gap-3 justify-end">
-                  <button
-                    onClick={() => setShowDestModal(false)}
-                    className="rounded-xl border border-white/12 bg-black/35 px-4 py-2 text-sm hover:bg-white/5"
-                  >
-                    Cancel
-                  </button>
-
-                  <button
-                    onClick={confirmDestinationAndOptimize}
-                    className="rounded-xl border border-emerald-300/20 bg-black/35 px-4 py-2 text-sm hover:bg-white/5"
-                  >
-                    Use destination + Optimize
-                  </button>
-                </div>
+            <div className="pl-10 lg:pl-30 -mt-24">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-black/35 px-3 py-1 text-xs text-zinc-300">
+                <IconDot on={hasGPSStart || !!zip.trim()} />
+                Trip builder
               </div>
+
+              <h1 className="mt-2 text-[46px] leading-[1.03] font-semibold tracking-tight">
+                Your birthday route
+              </h1>
+
+              <p className="mt-2 max-w-[640px] text-[19px] leading-snug text-zinc-300/90">
+                Plan stops, skip what you don’t want today, and
+                <br className="hidden sm:block" /> open the optimized route in Maps.
+              </p>
             </div>
-          ) : null}
+          </header>
 
-          {/* HERO CARDS (left summary + big next stop like inspo) */}
-<div className="grid gap-6 lg:gap-8 lg:grid-cols-2 items-start max-w-[980px] mx-auto">
-            {/* Summary card (left) */}
-<section className={`${GlassCard} p-7 lg:p-8 lg:translate-y-10`}>
-
-
+          {/* HERO CARDS */}
+          <div className="grid gap-6 lg:gap-8 lg:grid-cols-2 items-start max-w-[980px] mx-auto">
+            {/* Summary (left) */}
+            <section className={`${GlassCard} p-7 lg:p-8 lg:translate-y-10`}>
               <div className="text-[12px] uppercase tracking-wider text-zinc-500">Summary</div>
 
               <div className="mt-2 text-[22px] font-semibold">
@@ -1180,7 +1074,6 @@ export default function PlanPage() {
                 {lastOptimizedAt ? <Pill>Optimized {formatWhen(lastOptimizedAt)}</Pill> : <Pill>Not optimized</Pill>}
               </div>
 
-              {/* progress bar (fatter + glow like mock) */}
               <div className="mt-5 relative h-2.5 w-full max-w-[520px] rounded-full bg-white/8 overflow-hidden">
                 <div
                   className="absolute inset-y-0 left-0 rounded-full blur-lg"
@@ -1210,11 +1103,31 @@ export default function PlanPage() {
               </div>
             </section>
 
-            {/* Next stop card (right, big) */}
-<section className="flex flex-col gap-4 lg:-translate-y-34 lg:pl-2">
-              {activeItems.length ? (
+            {/* Right card */}
+            <section className="flex flex-col gap-4 lg:-translate-y-34 lg:pl-2">
+              {/* ✅ If there are no deals yet, show the empty-state card */}
+              {!hasAnyPlanned ? (
+                <div className={`${GlassCard} ${NextRimGlow} p-6 lg:p-8 w-full`}>
+                  <div className="text-[12px] uppercase tracking-wider text-zinc-400">Get started</div>
+
+                  <div className="mt-2 text-[32px] leading-[1.05] font-semibold">
+                    Add deals to
+                    <br />
+                    build your route ✨
+                  </div>
+
+                  <p className="mt-3 text-[15px] leading-relaxed text-zinc-200/85">
+                    Go to the Deals page and tap <span className="text-white/90 font-semibold">Add</span> on anything you
+                    want to claim. Once you have stops, I’ll optimize the order and open it in Maps.
+                  </p>
+
+                  <Link href="/app/deals" className={`mt-5 ${EmptyPrimaryBtn}`}>
+                    Browse deals →
+                  </Link>
+                </div>
+              ) : activeItems.length ? (
                 nextStop ? (
-<div className={`${GlassCard} ${NextRimGlow} p-6 lg:p-8 w-full`}>
+                  <div className={`${GlassCard} ${NextRimGlow} p-6 lg:p-8 w-full`}>
                     <div className="relative">
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0">
@@ -1247,15 +1160,17 @@ export default function PlanPage() {
                 )
               ) : null}
 
-              {/* “Reset claimed” sits under the right card in your mock */}
-<div className="flex justify-end w-full">
-                <button
-                  onClick={resetClaimed}
-                  className="rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm hover:bg-white/5"
-                >
-                  Reset claimed
-                </button>
-              </div>
+              {/* ✅ Hide reset claimed when there are no planned deals */}
+              {hasAnyPlanned ? (
+                <div className="flex justify-end w-full">
+                  <button
+                    onClick={resetClaimed}
+                    className="rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm hover:bg-white/5"
+                  >
+                    Reset claimed
+                  </button>
+                </div>
+              ) : null}
             </section>
           </div>
 
@@ -1275,10 +1190,14 @@ export default function PlanPage() {
           {items.length === 0 ? (
             <section className={`${GlassSection} mt-7 p-10 text-center text-zinc-300`}>
               Add deals from the Deals page to start planning your birthday run 🎉
+              <div className="mt-5 flex justify-center">
+                <Link href="/app/deals" className={EmptyPrimaryBtn}>
+                  Browse deals →
+                </Link>
+              </div>
             </section>
           ) : (
-<section className={`${GlassSection} mt-14 max-w-[900px] mx-auto`}>
-
+            <section className={`${GlassSection} mt-14 max-w-[900px] mx-auto`}>
               <div className="flex items-center justify-between px-5 py-4 border-b border-white/12">
                 <div>
                   <div className="text-[11px] uppercase tracking-wider text-zinc-500">Stops</div>
@@ -1300,7 +1219,6 @@ export default function PlanPage() {
               </div>
 
               <div className="relative px-5 py-5">
-                {/* rail */}
                 <div className="pointer-events-none absolute left-[30px] top-6 bottom-6 w-[6px] -translate-x-1/2 bg-emerald-200/10 blur-[6px]" />
                 <div className="pointer-events-none absolute left-[30px] top-6 bottom-6 w-px bg-emerald-200/22" />
                 <div className="pointer-events-none absolute left-[30px] top-6 h-40 w-px bg-gradient-to-b from-emerald-200/35 to-transparent" />
@@ -1401,9 +1319,7 @@ export default function PlanPage() {
                                       <div className="min-w-0">
                                         <div className="text-base font-semibold truncate">{d.name}</div>
                                         {d.freebie ? <div className="mt-1 text-sm text-zinc-200">{d.freebie}</div> : null}
-                                        {d.conditions ? (
-                                          <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div>
-                                        ) : null}
+                                        {d.conditions ? <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div> : null}
                                       </div>
                                     </div>
 
@@ -1432,10 +1348,7 @@ export default function PlanPage() {
                                           Make destination
                                         </button>
                                       ) : (
-                                        <button
-                                          onClick={clearDestination}
-                                          className={`${ActionBtn} border-white/12 bg-black/35`}
-                                        >
+                                        <button onClick={clearDestination} className={`${ActionBtn} border-white/12 bg-black/35`}>
                                           Clear destination
                                         </button>
                                       )}
@@ -1460,11 +1373,7 @@ export default function PlanPage() {
                               </div>
                             </div>
                           ) : (
-                            <div
-                              className={`${GlassCard} p-4 ${isSkipped ? "opacity-70" : ""} ${
-                                isClaimed ? "opacity-85" : ""
-                              }`}
-                            >
+                            <div className={`${GlassCard} p-4 ${isSkipped ? "opacity-70" : ""} ${isClaimed ? "opacity-85" : ""}`}>
                               <div className="flex items-start justify-between gap-4">
                                 <div className="min-w-0">
                                   <div className="flex flex-wrap items-center gap-2">
@@ -1478,9 +1387,7 @@ export default function PlanPage() {
                                     <div className="min-w-0">
                                       <div className="text-base font-semibold truncate">{d.name}</div>
                                       {d.freebie ? <div className="mt-1 text-sm text-zinc-200">{d.freebie}</div> : null}
-                                      {d.conditions ? (
-                                        <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div>
-                                      ) : null}
+                                      {d.conditions ? <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div> : null}
                                     </div>
                                   </div>
 
@@ -1542,7 +1449,6 @@ export default function PlanPage() {
                 </div>
               </div>
 
-              {/* Manage */}
               <div className="px-5 pb-5">
                 <div className={`${GlassCard} p-4`}>
                   <div className="text-[11px] uppercase tracking-wider text-zinc-500">Manage</div>
@@ -1555,8 +1461,7 @@ export default function PlanPage() {
                     </button>
                   </div>
                   <div className="mt-2 text-xs text-zinc-500">
-                    Selected: {planIds.length} • Active: {activeItems.length} • Skipped: {skippedIds.length} • Claimed:{" "}
-                    {claimedCount}
+                    Selected: {planIds.length} • Active: {activeItems.length} • Skipped: {skippedIds.length} • Claimed: {claimedCount}
                   </div>
                 </div>
               </div>
@@ -1565,62 +1470,61 @@ export default function PlanPage() {
         </div>
       </div>
 
-      {/* Sticky bottom dock (inspo-style) */}
-      <div className="fixed inset-x-0 bottom-0 z-50 pointer-events-none">
-        <div
-          className="mx-auto w-full max-w-[560px] px-5"
-          style={{ paddingBottom: "calc(18px + env(safe-area-inset-bottom))" }}
-        >
-          <div className="pointer-events-auto relative rounded-[22px] border border-white/12 bg-black/50 backdrop-blur-md shadow-[0_30px_120px_rgba(0,0,0,0.70)] px-4 py-3">
-            {/* top + bottom neon rim lines (like inspo) */}
-            <div className="pointer-events-none absolute inset-x-4 -top-[1px] h-px bg-gradient-to-r from-transparent via-emerald-200/22 to-transparent" />
-            <div className="pointer-events-none absolute inset-x-4 -bottom-[1px] h-px bg-gradient-to-r from-transparent via-emerald-200/14 to-transparent" />
+      {/* ✅ Hide sticky bottom dock when no deals are selected */}
+      {hasAnyPlanned ? (
+        <div className="fixed inset-x-0 bottom-0 z-50 pointer-events-none">
+          <div
+            className="mx-auto w-full max-w-[560px] px-5"
+            style={{ paddingBottom: "calc(18px + env(safe-area-inset-bottom))" }}
+          >
+            <div className="pointer-events-auto relative rounded-[22px] border border-white/12 bg-black/50 backdrop-blur-md shadow-[0_30px_120px_rgba(0,0,0,0.70)] px-4 py-3">
+              <div className="pointer-events-none absolute inset-x-4 -top-[1px] h-px bg-gradient-to-r from-transparent via-emerald-200/22 to-transparent" />
+              <div className="pointer-events-none absolute inset-x-4 -bottom-[1px] h-px bg-gradient-to-r from-transparent via-emerald-200/14 to-transparent" />
+              <div className="pointer-events-none absolute -top-10 left-10 right-10 h-16 rounded-full bg-emerald-300/10 blur-3xl" />
 
-            {/* subtle glow “spill” only above the dock */}
-            <div className="pointer-events-none absolute -top-10 left-10 right-10 h-16 rounded-full bg-emerald-300/10 blur-3xl" />
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs text-zinc-300">
+                  {routeLine ? (
+                    <span className="inline-flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-emerald-200/70 shadow-[0_0_18px_rgba(16,185,129,0.35)]" />
+                      {routeLine}
+                    </span>
+                  ) : (
+                    "Optimize to compute ETA + distance"
+                  )}
+                </div>
 
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-zinc-300">
-                {routeLine ? (
-                  <span className="inline-flex items-center gap-2">
-                    <span className="h-2 w-2 rounded-full bg-emerald-200/70 shadow-[0_0_18px_rgba(16,185,129,0.35)]" />
-                    {routeLine}
-                  </span>
-                ) : (
-                  "Optimize to compute ETA + distance"
-                )}
-              </div>
+                <div className="flex items-center gap-2">
+                  <OpenRouteButton orderedDeals={mapOrderedDeals} full />
 
-              <div className="flex items-center gap-2">
-                <OpenRouteButton orderedDeals={mapOrderedDeals} full />
+                  <button
+                    onClick={optimizeRoute}
+                    disabled={optimizing || loadingPreview || shareBusy}
+                    className={
+                      "rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm text-zinc-100 " +
+                      "hover:bg-white/5 disabled:opacity-50 shadow-[0_14px_45px_rgba(0,0,0,0.60)] transition"
+                    }
+                  >
+                    {loadingPreview ? "Checking ETA..." : optimizing ? "Optimizing..." : "Optimize"}
+                  </button>
 
-                <button
-                  onClick={optimizeRoute}
-                  disabled={optimizing || loadingPreview || shareBusy}
-                  className={
-                    "rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm text-zinc-100 " +
-                    "hover:bg-white/5 disabled:opacity-50 shadow-[0_14px_45px_rgba(0,0,0,0.60)] transition"
-                  }
-                >
-                  {loadingPreview ? "Checking ETA..." : optimizing ? "Optimizing..." : "Optimize"}
-                </button>
-
-                <button
-                  onClick={shareRoute}
-                  disabled={optimizing || loadingPreview || shareBusy}
-                  className={
-                    "rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm text-zinc-100 " +
-                    "hover:bg-white/5 disabled:opacity-50 shadow-[0_14px_45px_rgba(0,0,0,0.60)] transition"
-                  }
-                  title="Copy a route summary to your clipboard"
-                >
-                  {shareBusy ? "Copying..." : "Share"}
-                </button>
+                  <button
+                    onClick={shareRoute}
+                    disabled={optimizing || loadingPreview || shareBusy}
+                    className={
+                      "rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm text-zinc-100 " +
+                      "hover:bg-white/5 disabled:opacity-50 shadow-[0_14px_45px_rgba(0,0,0,0.60)] transition"
+                    }
+                    title="Copy a route summary to your clipboard"
+                  >
+                    {shareBusy ? "Copying..." : "Share"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </main>
   );
 }
