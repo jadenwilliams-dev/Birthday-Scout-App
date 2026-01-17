@@ -335,7 +335,7 @@ export default function ProfilePage() {
             <div className="px-6 py-5 border-b border-white/12 flex items-center justify-between">
               <div>
                 <div className="text-[11px] uppercase tracking-wider text-zinc-500">Profile</div>
-                <div className="text-sm text-zinc-300">Manage your personal information and preferences.</div>
+                <div className="text-sm text-zinc-300">Review and update your birthday, location, and routing defaults.</div>
               </div>
             </div>
 
