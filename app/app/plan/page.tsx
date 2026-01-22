@@ -6,6 +6,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { ALL_DEALS } from "@/app/lib/deals";
 import OpenRouteButton from "./OpenRouteButton";
+import { supabase } from "@/app/lib/supabaseClient";
 
 type Deal = {
   id: string;
@@ -53,6 +54,7 @@ const AUTO_ADVANCE_OPEN_KEY = "bs_auto_advance_open_maps";
 const RESOLVED_KEY = "bs_resolved_stops";
 
 const PLAN_UPDATED_EVENT = "bs_plan_updated";
+const PROFILE_UPDATED_EVENT = "bs_profile_updated";
 
 function readStringArray(key: string): string[] {
   try {
@@ -160,6 +162,43 @@ function tryConfetti() {
       w.confetti({ particleCount: 90, spread: 55, origin: { y: 0.7 } });
     }
   } catch {}
+}
+
+function normalizeZip(input: string) {
+  return input.replace(/\D/g, "").slice(0, 5);
+}
+
+/** ✅ Pull zip from Supabase profiles (per-user) */
+async function fetchZipFromDB(): Promise<string> {
+  const { data } = await supabase.auth.getUser();
+  const user = data.user;
+  if (!user) return "";
+
+  const { data: p, error } = await supabase
+    .from("profiles")
+    .select("zip")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (error) return "";
+  const z = typeof p?.zip === "string" ? p.zip : "";
+  return z || "";
+}
+
+/** ✅ Write zip to Supabase profiles (per-user) */
+async function saveZipToDB(nextZip: string) {
+  const { data } = await supabase.auth.getUser();
+  const user = data.user;
+  if (!user) return;
+
+  await supabase.from("profiles").upsert(
+    {
+      user_id: user.id,
+      zip: nextZip || null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" }
+  );
 }
 
 function Pill({
@@ -412,7 +451,6 @@ export default function PlanPage() {
     const c = readStringArray(CLAIMED_KEY);
     setPlanIds(p);
     setClaimedIds(c);
-    setZip(localStorage.getItem(ZIP_KEY) || "");
 
     setDestinationId(localStorage.getItem(DEST_KEY) || "");
     setPromptOff(readBool(DEST_PROMPT_OFF_KEY));
@@ -432,6 +470,39 @@ export default function PlanPage() {
         if (typeof s?.lat === "number" && typeof s?.lon === "number") setHasGPSStart(true);
       }
     } catch {}
+
+    // ✅ DB-first zip (per-user). Fallback to localStorage if DB empty.
+    (async () => {
+      const dbZip = await fetchZipFromDB();
+      if (dbZip) {
+        setZip(dbZip);
+        try {
+          localStorage.setItem(ZIP_KEY, dbZip);
+        } catch {}
+      } else {
+        setZip(localStorage.getItem(ZIP_KEY) || "");
+      }
+    })();
+  }, []);
+
+  // ✅ When profile saves, refresh zip here too.
+  useEffect(() => {
+    async function refresh() {
+      const dbZip = await fetchZipFromDB();
+      if (dbZip) {
+        setZip(dbZip);
+        try {
+          localStorage.setItem(ZIP_KEY, dbZip);
+        } catch {}
+      }
+    }
+
+    function onProfileUpdated() {
+      refresh();
+    }
+
+    window.addEventListener(PROFILE_UPDATED_EVENT, onProfileUpdated);
+    return () => window.removeEventListener(PROFILE_UPDATED_EVENT, onProfileUpdated);
   }, []);
 
   function hasStartCoords(): boolean {
@@ -509,9 +580,21 @@ export default function PlanPage() {
     window.dispatchEvent(new Event(PLAN_UPDATED_EVENT));
   }
 
+  // ✅ Update zip locally + in DB + notify other pages
   function saveZip(next: string) {
-    setZip(next);
-    localStorage.setItem(ZIP_KEY, next);
+    const z = normalizeZip(next);
+    setZip(z);
+    try {
+      localStorage.setItem(ZIP_KEY, z);
+    } catch {}
+
+    // fire-and-forget DB save (so Profile stays in sync too)
+    (async () => {
+      try {
+        await saveZipToDB(z);
+        window.dispatchEvent(new Event(PROFILE_UPDATED_EVENT));
+      } catch {}
+    })();
   }
 
   async function useMyLocation() {
@@ -1319,7 +1402,9 @@ export default function PlanPage() {
                                       <div className="min-w-0">
                                         <div className="text-base font-semibold truncate">{d.name}</div>
                                         {d.freebie ? <div className="mt-1 text-sm text-zinc-200">{d.freebie}</div> : null}
-                                        {d.conditions ? <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div> : null}
+                                        {d.conditions ? (
+                                          <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div>
+                                        ) : null}
                                       </div>
                                     </div>
 
@@ -1348,7 +1433,10 @@ export default function PlanPage() {
                                           Make destination
                                         </button>
                                       ) : (
-                                        <button onClick={clearDestination} className={`${ActionBtn} border-white/12 bg-black/35`}>
+                                        <button
+                                          onClick={clearDestination}
+                                          className={`${ActionBtn} border-white/12 bg-black/35`}
+                                        >
                                           Clear destination
                                         </button>
                                       )}
@@ -1373,7 +1461,9 @@ export default function PlanPage() {
                               </div>
                             </div>
                           ) : (
-                            <div className={`${GlassCard} p-4 ${isSkipped ? "opacity-70" : ""} ${isClaimed ? "opacity-85" : ""}`}>
+                            <div
+                              className={`${GlassCard} p-4 ${isSkipped ? "opacity-70" : ""} ${isClaimed ? "opacity-85" : ""}`}
+                            >
                               <div className="flex items-start justify-between gap-4">
                                 <div className="min-w-0">
                                   <div className="flex flex-wrap items-center gap-2">
@@ -1387,7 +1477,9 @@ export default function PlanPage() {
                                     <div className="min-w-0">
                                       <div className="text-base font-semibold truncate">{d.name}</div>
                                       {d.freebie ? <div className="mt-1 text-sm text-zinc-200">{d.freebie}</div> : null}
-                                      {d.conditions ? <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div> : null}
+                                      {d.conditions ? (
+                                        <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div>
+                                      ) : null}
                                     </div>
                                   </div>
 
@@ -1461,7 +1553,8 @@ export default function PlanPage() {
                     </button>
                   </div>
                   <div className="mt-2 text-xs text-zinc-500">
-                    Selected: {planIds.length} • Active: {activeItems.length} • Skipped: {skippedIds.length} • Claimed: {claimedCount}
+                    Selected: {planIds.length} • Active: {activeItems.length} • Skipped: {skippedIds.length} • Claimed:{" "}
+                    {claimedCount}
                   </div>
                 </div>
               </div>
