@@ -108,8 +108,17 @@ export default function ProfilePage() {
 
         if (error) throw error;
 
-        const storedZip = localStorage.getItem(ZIP_KEY) || "";
-        const z = (typeof p?.zip === "string" && p.zip) ? p.zip : (storedZip || DEFAULT_ZIP);
+        const storedZip = normalizeZip(localStorage.getItem(ZIP_KEY) || "");
+const dbZip = typeof p?.zip === "string" ? normalizeZip(p.zip) : "";
+
+// Prefer DB zip (per-account). Only fallback to localStorage if DB is empty.
+const z = dbZip.length === 5 ? dbZip : (storedZip.length === 5 ? storedZip : DEFAULT_ZIP);
+
+// If DB zip exists, keep localStorage in sync so other pages reading ZIP_KEY are correct for this user
+try {
+  if (dbZip.length === 5) localStorage.setItem(ZIP_KEY, dbZip);
+} catch {}
+
 
         const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
 

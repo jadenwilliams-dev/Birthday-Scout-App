@@ -38,6 +38,29 @@ function safeNext(raw: string | null): string {
   return raw;
 }
 
+function setLocalZip(zip: string | null) {
+  try {
+    if (zip && normalizeZip(zip).length === 5) {
+      localStorage.setItem(ZIP_KEY, normalizeZip(zip));
+    } else {
+      localStorage.removeItem(ZIP_KEY);
+    }
+  } catch {}
+}
+
+async function getProfileZip(userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("zip")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  const z = typeof data?.zip === "string" ? normalizeZip(data.zip) : "";
+  return z.length === 5 ? z : null;
+}
+
 async function upsertProfileForUser(userId: string, patch: Partial<ProfileRow>) {
   const payload: any = {
     user_id: userId,
@@ -134,6 +157,7 @@ export default function LoginClient() {
         // Session exists: write profile row
         const userId = data.session.user.id;
 
+        // For NEW accounts, we can initialize zip from local storage as a convenience
         const zipFallback = normalizeZip((localStorage.getItem(ZIP_KEY) || "").toString());
 
         await upsertProfileForUser(userId, {
@@ -156,12 +180,23 @@ export default function LoginClient() {
       const userId = data.user?.id;
       if (!userId) throw new Error("Login succeeded but user id missing.");
 
-      // Optional: if user never had a profile row, create one
-      // (keeps existing DB values if they already exist)
-      const zipFallback = normalizeZip((localStorage.getItem(ZIP_KEY) || "").toString());
-      await upsertProfileForUser(userId, {
-        zip: zipFallback || null,
-      });
+      // ✅ IMPORTANT:
+      // DO NOT overwrite this user's DB zip from shared localStorage.
+      // Instead: read the user's zip from DB and sync localStorage to it.
+      let dbZip: string | null = null;
+      try {
+        dbZip = await getProfileZip(userId);
+      } catch {
+        // ignore read failure, user can still proceed
+      }
+
+      setLocalZip(dbZip);
+
+      // Optional: if profile row doesn't exist at all, create one without zip pollution
+      // (keeps DB zip null unless user sets it in Profile page)
+      try {
+        await upsertProfileForUser(userId, {});
+      } catch {}
 
       afterAuthSuccess();
     } catch (e: any) {
