@@ -110,25 +110,31 @@ export default function LoginClient() {
     setBusy(true);
     try {
       if (mode === "signup") {
+        // Use current origin so confirm links always redirect to the right domain
+        const origin = typeof window !== "undefined" ? window.location.origin : "";
+
         const { data, error } = await supabase.auth.signUp({
           email: cleanEmail,
           password: pw,
-          options: { data: { displayName: cleanName } },
+          options: {
+            data: { displayName: cleanName },
+            emailRedirectTo: `${origin}/auth/callback`,
+          },
         });
         if (error) throw error;
 
         // If email confirmation is enabled, no session yet.
         if (!data.session) {
-          setErr("Check your email to confirm your account. If you don’t see it, check Spam or Promotions, then come back and log in.");
+          setErr(
+            "Check your email to confirm your account. If you don’t see it, check Spam or Promotions, then come back and log in."
+          );
           return;
         }
 
         // Session exists: write profile row
         const userId = data.session.user.id;
 
-        const zipFallback = normalizeZip(
-          (localStorage.getItem(ZIP_KEY) || "").toString()
-        );
+        const zipFallback = normalizeZip((localStorage.getItem(ZIP_KEY) || "").toString());
 
         await upsertProfileForUser(userId, {
           display_name: cleanName,
