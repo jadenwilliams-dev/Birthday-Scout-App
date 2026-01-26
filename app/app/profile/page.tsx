@@ -8,8 +8,19 @@ const ZIP_KEY = "bs_zip";
 const START_MODE_KEY = "bs_start_mode"; // "geo" | "zip"
 const DEFAULT_ZIP = "11111";
 
+// ✅ ADD: shared profile cache + event for Deals/Plan/etc
+const PROFILE_KEY = "bs_profile";
+const PROFILE_UPDATED_EVENT = "bs_profile_updated";
+
 function normalizeZip(input: string) {
   return input.replace(/\D/g, "").slice(0, 5);
+}
+
+// ✅ ADD: normalize zip from DB where it might be number
+function normalizeZipAny(v: unknown) {
+  if (typeof v === "string") return normalizeZip(v);
+  if (typeof v === "number" && Number.isFinite(v)) return normalizeZip(String(Math.trunc(v)));
+  return "";
 }
 
 function clampName(s: string) {
@@ -67,6 +78,24 @@ function BrandLockup() {
 
 type EditPanel = "none" | "all" | "name" | "birthday" | "zip" | "start";
 
+// ✅ ADD: helper to keep Deals/Plan/etc in sync
+function writeSharedProfileCache(next: { displayName: string; birthday: string; zip: string }) {
+  try {
+    localStorage.setItem(
+      PROFILE_KEY,
+      JSON.stringify({
+        displayName: next.displayName || "",
+        birthday: next.birthday || "",
+        zip: next.zip || DEFAULT_ZIP,
+      })
+    );
+  } catch {}
+
+  try {
+    window.dispatchEvent(new Event(PROFILE_UPDATED_EVENT));
+  } catch {}
+}
+
 export default function ProfilePage() {
   const [email, setEmail] = useState<string>("");
 
@@ -109,29 +138,35 @@ export default function ProfilePage() {
         if (error) throw error;
 
         const storedZip = normalizeZip(localStorage.getItem(ZIP_KEY) || "");
-const dbZip = typeof p?.zip === "string" ? normalizeZip(p.zip) : "";
+        const dbZip = normalizeZipAny(p?.zip);
 
-// Prefer DB zip (per-account). Only fallback to localStorage if DB is empty.
-const z = dbZip.length === 5 ? dbZip : (storedZip.length === 5 ? storedZip : DEFAULT_ZIP);
+        // Prefer DB zip (per-account). Only fallback to localStorage if DB is empty.
+        const z =
+          dbZip.length === 5 ? dbZip : storedZip.length === 5 ? storedZip : DEFAULT_ZIP;
 
-// If DB zip exists, keep localStorage in sync so other pages reading ZIP_KEY are correct for this user
-try {
-  if (dbZip.length === 5) localStorage.setItem(ZIP_KEY, dbZip);
-} catch {}
-
+        // If DB zip exists, keep localStorage in sync so other pages reading ZIP_KEY are correct for this user
+        try {
+          if (dbZip.length === 5) localStorage.setItem(ZIP_KEY, dbZip);
+        } catch {}
 
         const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
 
-        setDisplayName((p?.display_name as string) || "");
-        setBirthday((p?.birthday as string) || "");
+        const dn = (p?.display_name as string) || "";
+        const bd = (p?.birthday as string) || "";
+
+        setDisplayName(dn);
+        setBirthday(bd);
         setZip(z);
         setStartMode(mode);
 
         // init drafts
-        setDraftName((p?.display_name as string) || "");
-        setDraftBirthday((p?.birthday as string) || "");
+        setDraftName(dn);
+        setDraftBirthday(bd);
         setDraftZip(z);
         setDraftStartMode(mode);
+
+        // ✅ IMPORTANT: write shared cache so Deals page has correct data immediately
+        writeSharedProfileCache({ displayName: dn, birthday: bd, zip: z });
       } catch (e: any) {
         setErr(e?.message || "Failed to load profile.");
       }
@@ -264,7 +299,7 @@ try {
       // Persist start mode locally (preference)
       localStorage.setItem(START_MODE_KEY, mode);
 
-      // Keep ZIP cache locally for other pages that might still read ZIP_KEY
+      // Keep ZIP cache locally for any old readers
       localStorage.setItem(ZIP_KEY, finalZip);
 
       // ✅ Save profile per-user
@@ -279,6 +314,13 @@ try {
       setBirthday(finalBirthday || "");
       setZip(finalZip || DEFAULT_ZIP);
       setStartMode(mode);
+
+      // ✅ IMPORTANT: update shared cache + broadcast update
+      writeSharedProfileCache({
+        displayName: finalDisplay || "",
+        birthday: finalBirthday || "",
+        zip: finalZip || DEFAULT_ZIP,
+      });
 
       setSaved(true);
       setTimeout(() => setSaved(false), 1400);
@@ -332,7 +374,9 @@ try {
                 Settings
               </div>
 
-              <h1 className="mt-2 text-[46px] leading-[1.03] font-semibold tracking-tight">Profile</h1>
+              <h1 className="mt-2 text-[46px] leading-[1.03] font-semibold tracking-tight">
+                Profile
+              </h1>
 
               <p className="mt-2 max-w-[640px] text-[19px] leading-snug text-zinc-300/90">
                 Manage your personal info and routing preferences.
@@ -344,7 +388,9 @@ try {
             <div className="px-6 py-5 border-b border-white/12 flex items-center justify-between">
               <div>
                 <div className="text-[11px] uppercase tracking-wider text-zinc-500">Profile</div>
-                <div className="text-sm text-zinc-300">Review and update your birthday, location, and routing defaults.</div>
+                <div className="text-sm text-zinc-300">
+                  Review and update your birthday, location, and routing defaults.
+                </div>
               </div>
             </div>
 
@@ -381,7 +427,9 @@ try {
                       <div>
                         <div className="text-sm text-zinc-200">Birthday</div>
                         <div className="text-xs text-zinc-400">{birthday || "Not set"}</div>
-                        {birthdayIsToday ? <div className="text-xs text-emerald-200 mt-1">Happy birthday 🎉</div> : null}
+                        {birthdayIsToday ? (
+                          <div className="text-xs text-emerald-200 mt-1">Happy birthday 🎉</div>
+                        ) : null}
                       </div>
                     </div>
                     <button onClick={() => openPanel("birthday")} className={BtnEditSub}>
@@ -419,8 +467,12 @@ try {
                 </div>
 
                 <div className="mt-6 flex items-center gap-2 text-sm text-emerald-200">
-                  <span className="h-4 w-4 rounded-full bg-emerald-400/25 flex items-center justify-center text-xs">✓</span>
-                  {profileComplete ? "All set! Your profile is fully completed." : "Finish setup to complete your profile."}
+                  <span className="h-4 w-4 rounded-full bg-emerald-400/25 flex items-center justify-center text-xs">
+                    ✓
+                  </span>
+                  {profileComplete
+                    ? "All set! Your profile is fully completed."
+                    : "Finish setup to complete your profile."}
                 </div>
 
                 {err ? (

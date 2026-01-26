@@ -149,18 +149,25 @@ export default function DealsPage() {
         if (!user) return;
 
         const { data, error } = await supabase
-          .from("profiles")
-          .select("birthday, zip, display_name")
-          .eq("id", user.id)
-          .single();
+  .from("profiles")
+  .select("birthday, zip, display_name")
+  .eq("user_id", user.id)
+  .maybeSingle();
+
 
         if (error || !data) return;
 
         const next: Profile = {
-          birthday: typeof data.birthday === "string" ? data.birthday : "",
-          zip: typeof data.zip === "string" && data.zip ? data.zip : DEFAULT_ZIP,
-          displayName: typeof (data as any).display_name === "string" ? (data as any).display_name : "",
-        };
+  birthday: typeof data?.birthday === "string" ? data.birthday : "",
+  zip:
+    typeof data?.zip === "string"
+      ? data.zip
+      : typeof data?.zip === "number"
+      ? String(data.zip)
+      : DEFAULT_ZIP,
+  displayName: typeof data?.display_name === "string" ? data.display_name : "",
+};
+
 
         if (cancelled) return;
 
