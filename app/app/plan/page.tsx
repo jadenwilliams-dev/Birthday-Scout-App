@@ -597,29 +597,40 @@ export default function PlanPage() {
     })();
   }
 
-  async function useMyLocation() {
-    setError("");
-    setStatus("");
+async function useMyLocation() {
+  setError("");
+  setStatus("");
 
-    if (!navigator.geolocation) {
-      setError("Geolocation not supported in this browser.");
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = pos.coords.latitude;
-        const lon = pos.coords.longitude;
-        localStorage.setItem(START_KEY, JSON.stringify({ lat, lon }));
-        setHasGPSStart(true);
-        setStatus("Using current location (GPS).");
-      },
-      (err) => {
-        setError(err?.message || "Could not access your location.");
-      },
-      { enableHighAccuracy: true, timeout: 12000 }
-    );
+  if (!navigator.geolocation) {
+    setError("Geolocation not supported in this browser.");
+    return;
   }
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      localStorage.setItem(START_KEY, JSON.stringify({ lat, lon }));
+      setHasGPSStart(true);
+      setStatus("Using current location (GPS).");
+      setError("");
+    },
+    (err) => {
+      // ✅ IMPORTANT FIX: clear any stale GPS so we fall back to ZIP
+      try {
+        localStorage.removeItem(START_KEY);
+      } catch {}
+
+      setHasGPSStart(false);
+
+      const msg = err?.message || "Could not access your location.";
+      // Optional: friendlier message
+      setError(`Location not available. Using ZIP instead. (${msg})`);
+    },
+    { enableHighAccuracy: true, timeout: 12000 }
+  );
+}
+
 
   function toggleSkipped(id: string) {
     const set = new Set(skippedIds);
