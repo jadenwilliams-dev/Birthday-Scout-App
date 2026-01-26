@@ -4,6 +4,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ALL_DEALS } from "@/app/lib/deals";
+import { supabase } from "@/app/lib/supabaseClient";
 
 type Deal = {
   id: string;
@@ -55,7 +56,6 @@ function DealsTopLogo() {
   opacity-95
   drop-shadow-[0_14px_40px_rgba(0,0,0,0.9)]
 "
-
           draggable={false}
         />
       </Link>
@@ -96,6 +96,19 @@ function readProfileSafe(): Profile {
   }
 }
 
+function writeProfileSafe(p: Profile) {
+  try {
+    localStorage.setItem(
+      PROFILE_KEY,
+      JSON.stringify({
+        birthday: p.birthday ?? "",
+        zip: p.zip ?? "",
+        displayName: p.displayName ?? "",
+      })
+    );
+  } catch {}
+}
+
 function normalizeCategory(d: Deal): (typeof CATEGORIES)[number] {
   const raw = (d.category ?? d.type ?? "Other").trim();
   const lower = raw.toLowerCase();
@@ -120,12 +133,52 @@ export default function DealsPage() {
     setPlanIds(readStringArray(PLAN_KEY));
   }, []);
 
-  // load profile + keep it updated when Profile page saves
+  // ✅ load profile from local cache immediately, then refresh from Supabase
+  // ✅ also keep it updated when Profile page saves (event/storage)
   useEffect(() => {
-    function loadProfile() {
-      setProfile(readProfileSafe());
+    let cancelled = false;
+
+    // instant render from localStorage (fast)
+    setProfile(readProfileSafe());
+
+    async function refreshFromSupabase() {
+      try {
+        const { data: userRes, error: userErr } = await supabase.auth.getUser();
+        if (userErr) return;
+        const user = userRes?.user;
+        if (!user) return;
+
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("birthday, zip, display_name")
+          .eq("id", user.id)
+          .single();
+
+        if (error || !data) return;
+
+        const next: Profile = {
+          birthday: typeof data.birthday === "string" ? data.birthday : "",
+          zip: typeof data.zip === "string" && data.zip ? data.zip : DEFAULT_ZIP,
+          displayName: typeof (data as any).display_name === "string" ? (data as any).display_name : "",
+        };
+
+        if (cancelled) return;
+
+        setProfile(next);
+        writeProfileSafe(next);
+      } catch {
+        // ignore
+      }
     }
 
+    function loadProfile() {
+      // update from local cache right away
+      setProfile(readProfileSafe());
+      // then refresh from supabase in background
+      refreshFromSupabase();
+    }
+
+    // initial load
     loadProfile();
 
     const handler = () => loadProfile();
@@ -133,6 +186,7 @@ export default function DealsPage() {
     window.addEventListener("storage", handler);
 
     return () => {
+      cancelled = true;
       window.removeEventListener(PROFILE_UPDATED_EVENT, handler);
       window.removeEventListener("storage", handler);
     };
