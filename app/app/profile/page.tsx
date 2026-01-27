@@ -8,7 +8,7 @@ const ZIP_KEY = "bs_zip";
 const START_MODE_KEY = "bs_start_mode"; // "geo" | "zip"
 const DEFAULT_ZIP = "11111";
 
-// ✅ ADD: shared profile cache + event for Deals/Plan/etc
+// ✅ shared profile cache + event for Deals/Plan/etc
 const PROFILE_KEY = "bs_profile";
 const PROFILE_UPDATED_EVENT = "bs_profile_updated";
 
@@ -16,7 +16,7 @@ function normalizeZip(input: string) {
   return input.replace(/\D/g, "").slice(0, 5);
 }
 
-// ✅ ADD: normalize zip from DB where it might be number
+// ✅ normalize zip from DB where it might be number
 function normalizeZipAny(v: unknown) {
   if (typeof v === "string") return normalizeZip(v);
   if (typeof v === "number" && Number.isFinite(v)) return normalizeZip(String(Math.trunc(v)));
@@ -78,7 +78,7 @@ function BrandLockup() {
 
 type EditPanel = "none" | "all" | "name" | "birthday" | "zip" | "start";
 
-// ✅ ADD: helper to keep Deals/Plan/etc in sync
+// ✅ helper to keep Deals/Plan/etc in sync
 function writeSharedProfileCache(next: { displayName: string; birthday: string; zip: string }) {
   try {
     localStorage.setItem(
@@ -141,8 +141,7 @@ export default function ProfilePage() {
         const dbZip = normalizeZipAny(p?.zip);
 
         // Prefer DB zip (per-account). Only fallback to localStorage if DB is empty.
-        const z =
-          dbZip.length === 5 ? dbZip : storedZip.length === 5 ? storedZip : DEFAULT_ZIP;
+        const z = dbZip.length === 5 ? dbZip : storedZip.length === 5 ? storedZip : DEFAULT_ZIP;
 
         // If DB zip exists, keep localStorage in sync so other pages reading ZIP_KEY are correct for this user
         try {
@@ -284,12 +283,9 @@ export default function ProfilePage() {
       return;
     }
 
-    const nextDisplay =
-      which === "birthday" || which === "zip" || which === "start" ? displayName : name;
-    const nextBirthday =
-      which === "name" || which === "zip" || which === "start" ? birthday : bday;
-    const nextZip =
-      which === "name" || which === "birthday" || which === "start" ? zip : z;
+    const nextDisplay = which === "birthday" || which === "zip" || which === "start" ? displayName : name;
+    const nextBirthday = which === "name" || which === "zip" || which === "start" ? birthday : bday;
+    const nextZip = which === "name" || which === "birthday" || which === "start" ? zip : z;
 
     const finalDisplay = which === "all" ? name : nextDisplay;
     const finalBirthday = which === "all" ? bday : nextBirthday;
@@ -331,7 +327,15 @@ export default function ProfilePage() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-x-hidden text-white">
+    <main
+      className="
+        relative
+        min-h-screen
+        overflow-x-hidden
+        overflow-y-auto
+        text-white
+      "
+    >
       {/* BACKGROUND */}
       <div className="pointer-events-none fixed inset-0 z-0">
         <img
@@ -361,7 +365,7 @@ export default function ProfilePage() {
       </div>
 
       {/* CONTENT */}
-      <div className="relative z-20 px-6 pt-0 pb-[130px]">
+      <div className="relative z-20 px-6 pt-0 pb-[200px]">
         <div className="h-[72px]" />
 
         <div className={NARROW}>
@@ -374,9 +378,7 @@ export default function ProfilePage() {
                 Settings
               </div>
 
-              <h1 className="mt-2 text-[46px] leading-[1.03] font-semibold tracking-tight">
-                Profile
-              </h1>
+              <h1 className="mt-2 text-[46px] leading-[1.03] font-semibold tracking-tight">Profile</h1>
 
               <p className="mt-2 max-w-[640px] text-[19px] leading-snug text-zinc-300/90">
                 Manage your personal info and routing preferences.
@@ -470,9 +472,7 @@ export default function ProfilePage() {
                   <span className="h-4 w-4 rounded-full bg-emerald-400/25 flex items-center justify-center text-xs">
                     ✓
                   </span>
-                  {profileComplete
-                    ? "All set! Your profile is fully completed."
-                    : "Finish setup to complete your profile."}
+                  {profileComplete ? "All set! Your profile is fully completed." : "Finish setup to complete your profile."}
                 </div>
 
                 {err ? (
