@@ -595,14 +595,13 @@ export default function PlanPage() {
   try {
     localStorage.setItem(ZIP_KEY, z);
 
-    // ✅ if user is typing a ZIP, they mean ZIP mode
+    // ✅ IMPORTANT: switching to ZIP mode when user types a ZIP
     localStorage.setItem(START_MODE_KEY, "zip");
 
-    // ✅ clear stale GPS so optimize can't keep using it
+    // ✅ OPTIONAL but recommended: clear cached GPS start so nothing leaks
     localStorage.removeItem(START_KEY);
+    setHasGPSStart(false);
   } catch {}
-
-  setHasGPSStart(false);
 
   // fire-and-forget DB save (so Profile stays in sync too)
   (async () => {
@@ -612,6 +611,7 @@ export default function PlanPage() {
     } catch {}
   })();
 }
+
 
 
 async function useMyLocation() {
@@ -625,17 +625,18 @@ async function useMyLocation() {
 
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      const lat = pos.coords.latitude;
-      const lon = pos.coords.longitude;
+  const lat = pos.coords.latitude;
+  const lon = pos.coords.longitude;
+  localStorage.setItem(START_KEY, JSON.stringify({ lat, lon }));
 
-      // ✅ GEO mode
-      localStorage.setItem(START_MODE_KEY, "geo");
-      localStorage.setItem(START_KEY, JSON.stringify({ lat, lon }));
+  // ✅ force geo mode
+  localStorage.setItem(START_MODE_KEY, "geo");
 
-      setHasGPSStart(true);
-      setStatus("Using current location (GPS).");
-      setError("");
-    },
+  setHasGPSStart(true);
+  setStatus("Using current location (GPS).");
+  setError("");
+},
+
     (err) => {
       // ✅ IMPORTANT: clear any stale GPS so we fall back to ZIP
       try {

@@ -1,4 +1,3 @@
-// app/app/plan/OpenRouteButton.tsx
 "use client";
 
 import * as React from "react";
@@ -8,6 +7,8 @@ type DealLite = { id: string; name: string; city?: string };
 const DEST_KEY = "bs_destination_id";
 const RESOLVED_KEY = "bs_resolved_stops";
 const START_KEY = "bs_start";
+const ZIP_KEY = "bs_zip";
+const START_MODE_KEY = "bs_start_mode";
 
 function isProbablyIOS() {
   if (typeof navigator === "undefined") return false;
@@ -31,7 +32,9 @@ function readStart(): { lat: number; lon: number } | null {
     const raw = localStorage.getItem(START_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw);
-    if (typeof s?.lat === "number" && typeof s?.lon === "number") return { lat: s.lat, lon: s.lon };
+    if (typeof s?.lat === "number" && typeof s?.lon === "number") {
+      return { lat: s.lat, lon: s.lon };
+    }
     return null;
   } catch {
     return null;
@@ -49,9 +52,12 @@ export default function OpenRouteButton({
     if (!orderedDeals || orderedDeals.length === 0) return;
 
     const resolved = readResolved();
-    const start = readStart();
+    const gpsStart = readStart();
 
-    // Reorder so destination is last (if set + exists)
+    const mode = (localStorage.getItem(START_MODE_KEY) || "geo").trim();
+    const zip = (localStorage.getItem(ZIP_KEY) || "").trim();
+
+    // Reorder so destination is last
     const destId = (localStorage.getItem(DEST_KEY) || "").trim();
     let deals = orderedDeals.slice();
     if (destId) {
@@ -62,18 +68,30 @@ export default function OpenRouteButton({
       }
     }
 
-    // Use exact coords when available; otherwise text
+    // Build stops (ALWAYS prefer resolved coords)
     const stops = deals.map((d) => {
       const r = resolved[d.id];
-      if (r && typeof r.lat === "number" && typeof r.lon === "number") return `${r.lat},${r.lon}`;
-      return `${d.name} Las Vegas NV`;
+      if (r && typeof r.lat === "number" && typeof r.lon === "number") {
+        return `${r.lat},${r.lon}`;
+      }
+      // fallback text — ZIP anchored
+      return zip ? `${d.name} ${zip}` : `${d.name} Las Vegas NV`;
     });
 
     const destination = stops[stops.length - 1];
     const waypoints = stops.slice(0, -1);
 
-    // If we have a GPS start, use it as origin
-    const origin = start ? `${start.lat},${start.lon}` : "Las Vegas NV";
+    // START LOGIC (THIS WAS THE BUG)
+    // ZIP MODE → use ZIP
+    // GEO MODE → use GPS if available
+    const origin =
+      mode === "zip" && zip
+        ? zip
+        : gpsStart
+        ? `${gpsStart.lat},${gpsStart.lon}`
+        : zip
+        ? zip
+        : "Las Vegas NV";
 
     const url = isProbablyIOS()
       ? `https://maps.apple.com/?saddr=${encodeURIComponent(origin)}&daddr=${encodeURIComponent(
