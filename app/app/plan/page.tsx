@@ -39,6 +39,8 @@ const PLAN_KEY = "bs_plan";
 const CLAIMED_KEY = "bs_claimed";
 const ZIP_KEY = "bs_zip";
 const START_KEY = "bs_start";
+const START_MODE_KEY = "bs_start_mode"; // "geo" | "zip"
+
 
 const DEST_KEY = "bs_destination_id";
 const DEST_PROMPT_OFF_KEY = "bs_dest_prompt_off";
@@ -517,11 +519,16 @@ export default function PlanPage() {
   }
 
   function buildStopQuery(name: string): string {
-    const usingGPS = hasStartCoords();
-    const z = (localStorage.getItem(ZIP_KEY) || "89109").trim();
-    if (usingGPS) return name.trim();
-    return `${name.trim()} ${z}`;
-  }
+  const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
+  const z = (localStorage.getItem(ZIP_KEY) || "89109").trim();
+
+  // In ZIP mode, always include ZIP to bias results near that area
+  if (mode === "zip") return `${name.trim()} ${z}`;
+
+  // In GEO mode, keep it clean
+  return name.trim();
+}
+
 
   useEffect(() => {
     if (!destinationId) return;
@@ -766,6 +773,10 @@ async function useMyLocation() {
   }
 
   function getStartPayload(): { startCoords?: { lat: number; lon: number }; startQuery?: string } | null {
+  const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
+
+  // If user chose ZIP mode, ignore any cached GPS coords
+  if (mode === "geo") {
     const raw = localStorage.getItem(START_KEY);
     if (raw) {
       try {
@@ -775,11 +786,14 @@ async function useMyLocation() {
         }
       } catch {}
     }
-
-    const z = (localStorage.getItem(ZIP_KEY) || "").trim();
-    if (z) return { startQuery: z };
-    return null;
   }
+
+  const z = (localStorage.getItem(ZIP_KEY) || "").trim();
+  if (z) return { startQuery: z };
+
+  return null;
+}
+
 
   async function doOptimize(destOverride?: string) {
     const start = getStartPayload();
