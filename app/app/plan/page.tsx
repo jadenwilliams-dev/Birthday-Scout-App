@@ -589,20 +589,30 @@ export default function PlanPage() {
 
   // ✅ Update zip locally + in DB + notify other pages
   function saveZip(next: string) {
-    const z = normalizeZip(next);
-    setZip(z);
-    try {
-      localStorage.setItem(ZIP_KEY, z);
-    } catch {}
+  const z = normalizeZip(next);
+  setZip(z);
 
-    // fire-and-forget DB save (so Profile stays in sync too)
-    (async () => {
-      try {
-        await saveZipToDB(z);
-        window.dispatchEvent(new Event(PROFILE_UPDATED_EVENT));
-      } catch {}
-    })();
-  }
+  try {
+    localStorage.setItem(ZIP_KEY, z);
+
+    // ✅ if user is typing a ZIP, they mean ZIP mode
+    localStorage.setItem(START_MODE_KEY, "zip");
+
+    // ✅ clear stale GPS so optimize can't keep using it
+    localStorage.removeItem(START_KEY);
+  } catch {}
+
+  setHasGPSStart(false);
+
+  // fire-and-forget DB save (so Profile stays in sync too)
+  (async () => {
+    try {
+      await saveZipToDB(z);
+      window.dispatchEvent(new Event(PROFILE_UPDATED_EVENT));
+    } catch {}
+  })();
+}
+
 
 async function useMyLocation() {
   setError("");
@@ -617,26 +627,33 @@ async function useMyLocation() {
     (pos) => {
       const lat = pos.coords.latitude;
       const lon = pos.coords.longitude;
+
+      // ✅ GEO mode
+      localStorage.setItem(START_MODE_KEY, "geo");
       localStorage.setItem(START_KEY, JSON.stringify({ lat, lon }));
+
       setHasGPSStart(true);
       setStatus("Using current location (GPS).");
       setError("");
     },
     (err) => {
-      // ✅ IMPORTANT FIX: clear any stale GPS so we fall back to ZIP
+      // ✅ IMPORTANT: clear any stale GPS so we fall back to ZIP
       try {
         localStorage.removeItem(START_KEY);
+
+        // ✅ ZIP mode (so optimize uses the zip)
+        localStorage.setItem(START_MODE_KEY, "zip");
       } catch {}
 
       setHasGPSStart(false);
 
       const msg = err?.message || "Could not access your location.";
-      // Optional: friendlier message
       setError(`Location not available. Using ZIP instead. (${msg})`);
     },
     { enableHighAccuracy: true, timeout: 12000 }
   );
 }
+
 
 
   function toggleSkipped(id: string) {
