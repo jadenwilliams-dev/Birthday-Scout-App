@@ -1,7 +1,7 @@
 // app/app/plan/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { ALL_DEALS } from "@/app/lib/deals";
@@ -16,6 +16,8 @@ type Deal = {
   freebie?: string;
   conditions?: string;
   link?: string;
+  // optional (some of your deals may have this)
+  mapQuery?: string;
 };
 
 type OptimizeResp = {
@@ -40,7 +42,6 @@ const CLAIMED_KEY = "bs_claimed";
 const ZIP_KEY = "bs_zip";
 const START_KEY = "bs_start";
 const START_MODE_KEY = "bs_start_mode"; // "geo" | "zip"
-
 
 const DEST_KEY = "bs_destination_id";
 const DEST_PROMPT_OFF_KEY = "bs_dest_prompt_off";
@@ -207,7 +208,7 @@ function Pill({
   children,
   tone = "neutral",
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   tone?: "neutral" | "good" | "warn";
 }) {
   const cls =
@@ -441,7 +442,7 @@ export default function PlanPage() {
   const [optimizing, setOptimizing] = useState<boolean>(false);
   const [shareBusy, setShareBusy] = useState<boolean>(false);
 
-  // modal state
+  // modal state (kept; UI not shown in your paste, but state can stay)
   const [showDestModal, setShowDestModal] = useState<boolean>(false);
   const [modalChoice, setModalChoice] = useState<string>("");
   const [modalDistances, setModalDistances] = useState<Record<string, number>>({});
@@ -507,28 +508,10 @@ export default function PlanPage() {
     return () => window.removeEventListener(PROFILE_UPDATED_EVENT, onProfileUpdated);
   }, []);
 
-  function hasStartCoords(): boolean {
-    const raw = localStorage.getItem(START_KEY);
-    if (!raw) return false;
-    try {
-      const s = JSON.parse(raw);
-      return typeof s?.lat === "number" && typeof s?.lon === "number";
-    } catch {
-      return false;
-    }
-  }
-
   function buildStopQuery(name: string): string {
-  const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
-  const z = (localStorage.getItem(ZIP_KEY) || "89109").trim();
-
-  // In ZIP mode, always include ZIP to bias results near that area
-  if (mode === "zip") return `${name.trim()} ${z}`;
-
-  // In GEO mode, keep it clean
-  return name.trim();
-}
-
+    // Keep it clean. Backend finds nearest to start coords via OSM now.
+    return (name || "").trim();
+  }
 
   useEffect(() => {
     if (!destinationId) return;
@@ -589,73 +572,80 @@ export default function PlanPage() {
 
   // ✅ Update zip locally + in DB + notify other pages
   function saveZip(next: string) {
-  const z = normalizeZip(next);
-  setZip(z);
+    const z = normalizeZip(next);
+    setZip(z);
 
-  try {
-    localStorage.setItem(ZIP_KEY, z);
-
-    // ✅ IMPORTANT: switching to ZIP mode when user types a ZIP
-    localStorage.setItem(START_MODE_KEY, "zip");
-
-    // ✅ OPTIONAL but recommended: clear cached GPS start so nothing leaks
-    localStorage.removeItem(START_KEY);
-    setHasGPSStart(false);
-  } catch {}
-
-  // fire-and-forget DB save (so Profile stays in sync too)
-  (async () => {
     try {
-      await saveZipToDB(z);
-      window.dispatchEvent(new Event(PROFILE_UPDATED_EVENT));
-    } catch {}
-  })();
-}
+      localStorage.setItem(ZIP_KEY, z);
 
+      // ✅ force ZIP mode when user types a ZIP
+      localStorage.setItem(START_MODE_KEY, "zip");
 
-
-async function useMyLocation() {
-  setError("");
-  setStatus("");
-
-  if (!navigator.geolocation) {
-    setError("Geolocation not supported in this browser.");
-    return;
-  }
-
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-  const lat = pos.coords.latitude;
-  const lon = pos.coords.longitude;
-  localStorage.setItem(START_KEY, JSON.stringify({ lat, lon }));
-
-  // ✅ force geo mode
-  localStorage.setItem(START_MODE_KEY, "geo");
-
-  setHasGPSStart(true);
-  setStatus("Using current location (GPS).");
-  setError("");
-},
-
-    (err) => {
-      // ✅ IMPORTANT: clear any stale GPS so we fall back to ZIP
-      try {
-        localStorage.removeItem(START_KEY);
-
-        // ✅ ZIP mode (so optimize uses the zip)
-        localStorage.setItem(START_MODE_KEY, "zip");
-      } catch {}
-
+      // ✅ clear cached GPS start so nothing leaks
+      localStorage.removeItem(START_KEY);
       setHasGPSStart(false);
 
-      const msg = err?.message || "Could not access your location.";
-      setError(`Location not available. Using ZIP instead. (${msg})`);
-    },
-    { enableHighAccuracy: true, timeout: 12000 }
-  );
-}
+      // ✅ ZIP changed → clear cached resolved stops + old route stats/order
+      localStorage.removeItem(RESOLVED_KEY);
+      localStorage.removeItem(LAST_ROUTE_ORDER);
+      localStorage.removeItem(LAST_OPT_KEY);
+      localStorage.removeItem(LAST_ROUTE_DIST_M);
+      localStorage.removeItem(LAST_ROUTE_DUR_S);
 
+      setLastRouteOrder([]);
+      setLastOptimizedAt(null);
+      setLastRouteDistanceM(null);
+      setLastRouteDurationS(null);
+    } catch {}
 
+    // fire-and-forget DB save (so Profile stays in sync too)
+    (async () => {
+      try {
+        await saveZipToDB(z);
+        window.dispatchEvent(new Event(PROFILE_UPDATED_EVENT));
+      } catch {}
+    })();
+  }
+
+  async function useMyLocation() {
+    setError("");
+    setStatus("");
+
+    if (!navigator.geolocation) {
+      setError("Geolocation not supported in this browser.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        localStorage.setItem(START_KEY, JSON.stringify({ lat, lon }));
+
+        // ✅ force geo mode
+        localStorage.setItem(START_MODE_KEY, "geo");
+
+        setHasGPSStart(true);
+        setStatus("Using current location (GPS).");
+        setError("");
+      },
+      (err) => {
+        // ✅ clear any stale GPS so we fall back to ZIP
+        try {
+          localStorage.removeItem(START_KEY);
+
+          // ✅ ZIP mode (so optimize uses the zip)
+          localStorage.setItem(START_MODE_KEY, "zip");
+        } catch {}
+
+        setHasGPSStart(false);
+
+        const msg = err?.message || "Could not access your location.";
+        setError(`Location not available. Using ZIP instead. (${msg})`);
+      },
+      { enableHighAccuracy: true, timeout: 12000 }
+    );
+  }
 
   function toggleSkipped(id: string) {
     const set = new Set(skippedIds);
@@ -710,9 +700,10 @@ async function useMyLocation() {
     dispatchPlanUpdated();
   }
 
+  // ✅ FIXED: only ONE function, no Vegas hardcode
   function openStopInMaps(d: Deal) {
-    const z = (localStorage.getItem(ZIP_KEY) || "89109").trim();
-    openPlaceInMaps(`${d.name} Las Vegas NV ${z}`);
+    const q = buildStopQuery((d.mapQuery || d.name) ?? d.name);
+    openPlaceInMaps(q);
   }
 
   function computeNextStop(prospectiveClaimed: Set<string>): Deal | null {
@@ -791,27 +782,27 @@ async function useMyLocation() {
   }
 
   function getStartPayload(): { startCoords?: { lat: number; lon: number }; startQuery?: string } | null {
-  const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
+    const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
 
-  // If user chose ZIP mode, ignore any cached GPS coords
-  if (mode === "geo") {
-    const raw = localStorage.getItem(START_KEY);
-    if (raw) {
-      try {
-        const s = JSON.parse(raw);
-        if (typeof s?.lat === "number" && typeof s?.lon === "number") {
-          return { startCoords: { lat: s.lat, lon: s.lon } };
-        }
-      } catch {}
+    // If user chose GEO mode, use GPS coords if present
+    if (mode === "geo") {
+      const raw = localStorage.getItem(START_KEY);
+      if (raw) {
+        try {
+          const s = JSON.parse(raw);
+          if (typeof s?.lat === "number" && typeof s?.lon === "number") {
+            return { startCoords: { lat: s.lat, lon: s.lon } };
+          }
+        } catch {}
+      }
     }
+
+    // Otherwise, ZIP
+    const z = (localStorage.getItem(ZIP_KEY) || "").trim();
+    if (z) return { startQuery: z };
+
+    return null;
   }
-
-  const z = (localStorage.getItem(ZIP_KEY) || "").trim();
-  if (z) return { startQuery: z };
-
-  return null;
-}
-
 
   async function doOptimize(destOverride?: string) {
     const start = getStartPayload();
@@ -825,9 +816,10 @@ async function useMyLocation() {
       return;
     }
 
+    // ✅ FIXED: use mapQuery when available
     const stops = activeItems.map((d) => ({
       id: d.id,
-      query: buildStopQuery(d.name),
+      query: buildStopQuery(d.mapQuery || d.name),
     }));
 
     const destToSend =
@@ -916,9 +908,10 @@ async function useMyLocation() {
       return;
     }
 
+    // ✅ FIXED: use mapQuery when available
     const stops = activeItems.map((d) => ({
       id: d.id,
-      query: buildStopQuery(d.name),
+      query: buildStopQuery(d.mapQuery || d.name),
     }));
 
     setLoadingPreview(true);
@@ -1029,7 +1022,7 @@ async function useMyLocation() {
 
     setShareBusy(true);
     try {
-      const z = (localStorage.getItem(ZIP_KEY) || "89109").trim();
+      const z = (localStorage.getItem(ZIP_KEY) || "").trim();
 
       const stops = routeSummary.map((d, i) => `${i + 1}. ${d.name}`).join("\n");
       const stats = routeLine ? `Route: ${routeLine}` : "";
@@ -1042,7 +1035,7 @@ async function useMyLocation() {
         `BirthdayScout route\n` +
         `${stats ? stats + "\n" : ""}` +
         `${destName ? `Destination: ${destName}\n` : ""}` +
-        `ZIP: ${z}\n` +
+        `${z ? `ZIP: ${z}\n` : ""}` +
         `${skippedIds.length ? `Skipped today: ${skippedIds.length}\n` : ""}` +
         `\nStops:\n${stops}`;
 
@@ -1505,7 +1498,9 @@ async function useMyLocation() {
                             </div>
                           ) : (
                             <div
-                              className={`${GlassCard} p-4 ${isSkipped ? "opacity-70" : ""} ${isClaimed ? "opacity-85" : ""}`}
+                              className={`${GlassCard} p-4 ${isSkipped ? "opacity-70" : ""} ${
+                                isClaimed ? "opacity-85" : ""
+                              }`}
                             >
                               <div className="flex items-start justify-between gap-4">
                                 <div className="min-w-0">

@@ -74,16 +74,16 @@ export default function OpenRouteButton({
       if (r && typeof r.lat === "number" && typeof r.lon === "number") {
         return `${r.lat},${r.lon}`;
       }
-      // fallback text — ZIP anchored
-      return zip ? `${d.name} ${zip}` : `${d.name} Las Vegas NV`;
+      // fallback text — ZIP anchored if possible
+      return zip ? `${d.name} ${zip}` : d.name;
     });
 
     const destination = stops[stops.length - 1];
     const waypoints = stops.slice(0, -1);
 
-    // START LOGIC (THIS WAS THE BUG)
+    // START LOGIC
     // ZIP MODE → use ZIP
-    // GEO MODE → use GPS if available
+    // GEO MODE → use GPS if available, otherwise ZIP, otherwise generic
     const origin =
       mode === "zip" && zip
         ? zip
@@ -91,7 +91,7 @@ export default function OpenRouteButton({
         ? `${gpsStart.lat},${gpsStart.lon}`
         : zip
         ? zip
-        : "Las Vegas NV";
+        : "United States";
 
     const url = isProbablyIOS()
       ? `https://maps.apple.com/?saddr=${encodeURIComponent(origin)}&daddr=${encodeURIComponent(
