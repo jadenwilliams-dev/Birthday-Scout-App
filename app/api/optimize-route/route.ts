@@ -2,16 +2,17 @@
 import { NextResponse } from "next/server";
 
 type ReqBody = {
-  startQuery?: string; // ZIP in your UI
-  startCoords?: { lat: number; lon: number }; // GPS mode
+  startQuery?: string;
+  startCoords?: { lat: number; lon: number };
   destinationId?: string;
   previewOnly?: boolean;
-  stops: { id: string; query: string }[]; // query should be mapQuery/name (no Vegas hardcoding)
+  stops: { id: string; query: string }[];
 };
 
 type Geo = { lon: number; lat: number };
 
 const ORS_KEY = process.env.ORS_API_KEY;
+const GOOGLE_PLACES_KEY = process.env.GOOGLE_PLACES_API_KEY;
 
 // ---------- fetch with timeout ----------
 async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
@@ -40,6 +41,72 @@ function haversineMeters(a: Geo, b: Geo) {
 
 function metersToMiles(m: number) {
   return m / 1609.34;
+}
+
+// ---------- ORS geocode ----------
+async function geocodeSearch(query: string, start: Geo, radiusMeters: number, size: number) {
+  if (!ORS_KEY) throw new Error("Missing ORS_API_KEY in env");
+
+  const u = new URL("https://api.openrouteservice.org/geocode/search");
+  u.searchParams.set("api_key", ORS_KEY);
+  u.searchParams.set("text", query);
+  u.searchParams.set("size", String(size));
+  u.searchParams.set("boundary.country", "US");
+  u.searchParams.set("layers", "venue,address");
+
+  u.searchParams.set("focus.point.lat", String(start.lat));
+  u.searchParams.set("focus.point.lon", String(start.lon));
+
+  u.searchParams.set("boundary.circle.lat", String(start.lat));
+  u.searchParams.set("boundary.circle.lon", String(start.lon));
+  u.searchParams.set("boundary.circle.radius", String(radiusMeters));
+
+  const res = await fetchWithTimeout(u.toString(), { cache: "no-store" }, 9000);
+  if (!res.ok) throw new Error(`Geocode failed (${res.status})`);
+  const data = await res.json();
+  const feats = data?.features;
+  return Array.isArray(feats) ? feats : [];
+}
+
+async function geocodeClosest(query: string, start: Geo): Promise<Geo> {
+  const passes = [
+    { radius: 8000, size: 35 },
+    { radius: 20000, size: 35 },
+    { radius: 50000, size: 35 },
+  ];
+
+  const all: any[] = [];
+  const seen = new Set<string>();
+
+  for (const p of passes) {
+    const feats = await geocodeSearch(query, start, p.radius, p.size);
+    for (const f of feats) {
+      const coords = f?.geometry?.coordinates;
+      if (!coords || coords.length < 2) continue;
+      const key = `${coords[0].toFixed(5)},${coords[1].toFixed(5)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push(f);
+    }
+    if (all.length >= 15) break;
+  }
+
+  if (all.length === 0) throw new Error(`No geocode result for: ${query}`);
+
+  let best = all[0];
+  let bestDist = Infinity;
+
+  for (const f of all) {
+    const [lon, lat] = f.geometry.coordinates;
+    const d = haversineMeters(start, { lat, lon });
+    if (d < bestDist) {
+      bestDist = d;
+      best = f;
+    }
+  }
+
+  const [lon, lat] = best.geometry.coordinates;
+  return { lat, lon };
 }
 
 // ---------- ORS matrix (start -> each stop) ----------
@@ -83,114 +150,137 @@ async function matrixFromStart(start: Geo, stops: Geo[]) {
   return { distances, durations };
 }
 
-// ---------- ORS Geocode (Pelias) ----------
-// This is the key change: instead of Nominatim (which can return “random top 10”),
-// we bias each brand query near the user's start point using focus.point.*.
-async function geocodeZipORS(zip: string): Promise<Geo> {
-  if (!ORS_KEY) throw new Error("Missing ORS_API_KEY in env");
-
-  const z = zip.trim();
-  if (!z) throw new Error("Missing ZIP");
-
-  const u = new URL("https://api.openrouteservice.org/geocode/search");
-  u.searchParams.set("text", `${z} United States`);
-  u.searchParams.set("size", "1");
-  u.searchParams.set("boundary.country", "USA");
-
-  const res = await fetchWithTimeout(
-    u.toString(),
-    { method: "GET", headers: { Authorization: ORS_KEY }, cache: "no-store" },
-    9000
-  );
-
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`ORS ZIP geocode failed (${res.status}): ${txt}`);
-  }
-
-  const data = await res.json();
-  const f = data?.features?.[0];
-  const coords = f?.geometry?.coordinates;
-
-  if (!Array.isArray(coords) || coords.length < 2) {
-    throw new Error(`Could not geocode ZIP: ${z}`);
-  }
-
-  const lon = Number(coords[0]);
-  const lat = Number(coords[1]);
-  if (!isFinite(lat) || !isFinite(lon)) throw new Error(`Bad ZIP geocode for: ${z}`);
-
-  return { lat, lon };
+// ---------- chain detection ----------
+function detectChain(query: string): { name: string } | null {
+  const q = query.toLowerCase();
+  if (q.includes("starbucks")) return { name: "Starbucks" };
+  if (q.includes("chipotle")) return { name: "Chipotle" };
+  if (q.includes("nothing bundt")) return { name: "Nothing Bundt Cakes" };
+  return null;
 }
 
-async function orsNearest(query: string, near: Geo): Promise<Geo> {
-  if (!ORS_KEY) throw new Error("Missing ORS_API_KEY in env");
+// ---------- Google Places cache ----------
+const placesCache = new Map<string, { at: number; geo: Geo }>();
 
-  const q = query.trim();
-  if (!q) throw new Error("Empty place query");
+// During dev you can set this to 30_000 to avoid “sticky wrong answers” while testing.
+// In production, use 24h.
+const PLACES_TTL_MS = 24 * 60 * 60 * 1000;
 
-  const u = new URL("https://api.openrouteservice.org/geocode/search");
-  u.searchParams.set("text", q);
-  u.searchParams.set("size", "20");
+function placesCacheKey(name: string, start: Geo) {
+  // ~1km grid so close-by queries reuse cached answer
+  const lat = start.lat.toFixed(2);
+  const lon = start.lon.toFixed(2);
+  return `${name}:${lat},${lon}`;
+}
 
-  // bias near the start point
-  u.searchParams.set("focus.point.lat", String(near.lat));
-  u.searchParams.set("focus.point.lon", String(near.lon));
+// ---------- Google Places: nearest STRICT match by name ----------
+async function placesNearestByName(start: Geo, name: string): Promise<Geo> {
+  if (!GOOGLE_PLACES_KEY) throw new Error("Missing GOOGLE_PLACES_API_KEY in env");
 
-  // keep in US
-  u.searchParams.set("boundary.country", "USA");
+  const key = placesCacheKey(name, start);
+  const cached = placesCache.get(key);
+  if (cached && Date.now() - cached.at < PLACES_TTL_MS) return cached.geo;
 
-  const res = await fetchWithTimeout(
-    u.toString(),
-    { method: "GET", headers: { Authorization: ORS_KEY }, cache: "no-store" },
-    9000
-  );
+  const target = name.toLowerCase();
 
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`ORS place geocode failed (${res.status}): ${txt}`);
+  function isGoodMatch(r: any) {
+    const n = String(r?.name || "").toLowerCase();
+    // strict: must include chain name in the returned place name
+    return n.includes(target);
   }
 
-  const data = await res.json();
-  const feats = data?.features;
-  if (!Array.isArray(feats) || feats.length === 0) {
-    throw new Error(`No ORS results for: ${q}`);
+  function pickFirst(arr: any[]): Geo | null {
+    const first = arr[0];
+    const lat = first?.geometry?.location?.lat;
+    const lon = first?.geometry?.location?.lng;
+    if (typeof lat !== "number" || typeof lon !== "number") return null;
+    return { lat, lon };
   }
 
-  // pick closest returned feature (extra safety)
-  let best: Geo | null = null;
-  let bestDist = Infinity;
+  // 1) rankby=distance (fast), but filter strictly
+  const u1 = new URL("https://maps.googleapis.com/maps/api/place/nearbysearch/json");
+  u1.searchParams.set("key", GOOGLE_PLACES_KEY);
+  u1.searchParams.set("location", `${start.lat},${start.lon}`);
+  u1.searchParams.set("rankby", "distance");
+  u1.searchParams.set("name", name); // ✅ stricter than keyword
 
-  for (const f of feats) {
-    const coords = f?.geometry?.coordinates; // [lon, lat]
-    if (!Array.isArray(coords) || coords.length < 2) continue;
+  const res1 = await fetchWithTimeout(u1.toString(), { cache: "no-store" }, 8000);
+  if (!res1.ok) throw new Error(`Places NearbySearch failed (${res1.status})`);
+  const data1 = await res1.json();
 
-    const lon = Number(coords[0]);
-    const lat = Number(coords[1]);
-    if (!isFinite(lat) || !isFinite(lon)) continue;
+  const results1: any[] = Array.isArray(data1?.results) ? data1.results : [];
+  const good1 = results1.filter(isGoodMatch);
+  const got1 = pickFirst(good1);
 
-    const g = { lat, lon };
-    const d = haversineMeters(near, g);
-    if (d < bestDist) {
-      bestDist = d;
-      best = g;
-    }
+  if (got1) {
+    placesCache.set(key, { at: Date.now(), geo: got1 });
+    return got1;
   }
 
-  if (!best) throw new Error("ORS results had no valid coordinates");
-  return best;
+  // 2) fallback: radius search (more results), then choose closest by haversine
+  const u2 = new URL("https://maps.googleapis.com/maps/api/place/nearbysearch/json");
+  u2.searchParams.set("key", GOOGLE_PLACES_KEY);
+  u2.searchParams.set("location", `${start.lat},${start.lon}`);
+  u2.searchParams.set("radius", "50000"); // 50km
+  u2.searchParams.set("name", name);
+
+  const res2 = await fetchWithTimeout(u2.toString(), { cache: "no-store" }, 8000);
+  if (!res2.ok) throw new Error(`Places NearbySearch (radius) failed (${res2.status})`);
+  const data2 = await res2.json();
+
+  const results2: any[] = Array.isArray(data2?.results) ? data2.results : [];
+  const good2 = results2.filter(isGoodMatch);
+
+  if (good2.length === 0) {
+    const status = data2?.status ? String(data2.status) : "unknown";
+    throw new Error(`Places returned no strict match for "${name}" (status=${status})`);
+  }
+
+  good2.sort((a, b) => {
+    const al = a?.geometry?.location;
+    const bl = b?.geometry?.location;
+
+    const ag: Geo | null =
+      typeof al?.lat === "number" && typeof al?.lng === "number" ? { lat: al.lat, lon: al.lng } : null;
+    const bg: Geo | null =
+      typeof bl?.lat === "number" && typeof bl?.lng === "number" ? { lat: bl.lat, lon: bl.lng } : null;
+
+    if (!ag && !bg) return 0;
+    if (!ag) return 1;
+    if (!bg) return -1;
+
+    return haversineMeters(start, ag) - haversineMeters(start, bg);
+  });
+
+  const got2 = pickFirst(good2);
+  if (!got2) throw new Error(`Places strict match had bad geometry for "${name}"`);
+
+  placesCache.set(key, { at: Date.now(), geo: got2 });
+  return got2;
 }
 
 // ---------- resolve stop ----------
 async function resolveStopGeo(query: string, start: Geo): Promise<{ geo: Geo; pickedFrom: string }> {
-  const geo = await orsNearest(query, start);
-  return { geo, pickedFrom: "ors-geocode" };
+  const chain = detectChain(query);
+
+  // Chains => Google Places strict nearest
+  if (chain) {
+    const geo = await placesNearestByName(start, chain.name);
+    return { geo, pickedFrom: `google_places:${chain.name}` };
+  }
+
+  // Non-chain => ORS geocode closest
+  const geo = await geocodeClosest(query, start);
+  return { geo, pickedFrom: "ors" };
 }
 
 export async function POST(req: Request) {
   try {
     if (!ORS_KEY) {
       return NextResponse.json({ optimized: false, note: "Missing ORS_API_KEY" }, { status: 500 });
+    }
+    if (!GOOGLE_PLACES_KEY) {
+      return NextResponse.json({ optimized: false, note: "Missing GOOGLE_PLACES_API_KEY" }, { status: 500 });
     }
 
     const body = (await req.json()) as ReqBody;
@@ -208,14 +298,14 @@ export async function POST(req: Request) {
       start = { lat: body.startCoords.lat, lon: body.startCoords.lon };
       startSource = "gps";
     } else if (body.startQuery && body.startQuery.trim()) {
-      // key change: use ORS for ZIP geocode too (more consistent)
-      start = await geocodeZipORS(body.startQuery.trim());
+      const vegasSeed = { lat: 36.1699, lon: -115.1398 };
+      start = await geocodeClosest(`${body.startQuery.trim()} United States`, vegasSeed);
       startSource = "zip";
     } else {
       return NextResponse.json({ optimized: false, note: "Missing start (coords or zip)" }, { status: 400 });
     }
 
-    // ---- resolve stop coords (near the start) ----
+    // ---- resolve stop coords ----
     const resolvedStopsBase = await Promise.all(
       stopsIn.map(async (s) => {
         const { geo, pickedFrom } = await resolveStopGeo(s.query, start!);
@@ -315,10 +405,7 @@ export async function POST(req: Request) {
 
     if (!optRes.ok) {
       const txt = await optRes.text();
-      return NextResponse.json(
-        { optimized: false, note: `ORS optimization failed (${optRes.status}): ${txt}` },
-        { status: 502 }
-      );
+      return NextResponse.json({ optimized: false, note: `ORS optimization failed (${optRes.status}): ${txt}` }, { status: 502 });
     }
 
     const opt = await optRes.json();
@@ -355,10 +442,7 @@ export async function POST(req: Request) {
     });
   } catch (e: any) {
     return NextResponse.json(
-      {
-        optimized: false,
-        note: e?.name === "AbortError" ? "Request timed out. Try again." : e?.message || "Server error",
-      },
+      { optimized: false, note: e?.name === "AbortError" ? "Request timed out. Try again." : e?.message || "Server error" },
       { status: 500 }
     );
   }

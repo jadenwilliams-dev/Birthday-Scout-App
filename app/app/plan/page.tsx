@@ -862,6 +862,19 @@ export default function PlanPage() {
       }
 
       const orderedIds = data.orderedIds;
+      // ✅ APPLY optimized order to the actual plan list (this updates the UI)
+const orderedSet = new Set(orderedIds);
+
+// keep anything not in the optimized route at the end
+const rest = planIds.filter((id) => !orderedSet.has(id));
+
+// final visible order = optimized route first
+const finalOrder = [...orderedIds, ...rest];
+
+setPlanIds(finalOrder);
+writeStringArray(PLAN_KEY, finalOrder);
+dispatchPlanUpdated();
+
 
       setLastRouteOrder(orderedIds);
       writeStringArray(LAST_ROUTE_ORDER, orderedIds);
