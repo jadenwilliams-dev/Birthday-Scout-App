@@ -862,32 +862,39 @@ export default function PlanPage() {
       }
 
       const orderedIds = data.orderedIds;
-      // ✅ APPLY optimized order to the actual plan list (this updates the UI)
-const orderedSet = new Set(orderedIds);
 
-// keep anything not in the optimized route at the end
-const rest = planIds.filter((id) => !orderedSet.has(id));
+// ✅ APPLY optimized order to the actual plan list (this updates the UI)
+setPlanIds((prev) => {
+  const orderedSet = new Set(orderedIds);
 
-// final visible order = optimized route first
-const finalOrder = [...orderedIds, ...rest];
+  // keep anything not in the optimized route at the end (skipped, etc.)
+  const rest = prev.filter((id) => !orderedSet.has(id));
 
-setPlanIds(finalOrder);
-writeStringArray(PLAN_KEY, finalOrder);
-dispatchPlanUpdated();
+  const finalOrder = [...orderedIds, ...rest];
+  writeStringArray(PLAN_KEY, finalOrder);
+  dispatchPlanUpdated();
+  return finalOrder;
+});
+
+// keep route order for routeSummary/next stop UI
+setLastRouteOrder(orderedIds);
+writeStringArray(LAST_ROUTE_ORDER, orderedIds);
+
 
 
       setLastRouteOrder(orderedIds);
       writeStringArray(LAST_ROUTE_ORDER, orderedIds);
 
-      const planSet = new Set(planIds);
-      const cleaned = orderedIds.filter((id) => planSet.has(id));
+const planSet = new Set(planIds);
+const cleaned = orderedIds.filter((id) => planSet.has(id));
 
-      const remaining = planIds.filter((id) => !cleaned.includes(id));
-      const finalOrder = [...cleaned, ...remaining];
+const remaining = planIds.filter((id) => !cleaned.includes(id));
+const finalOrder = [...cleaned, ...remaining];
 
-      setPlanIds(finalOrder);
-      writeStringArray(PLAN_KEY, finalOrder);
-      dispatchPlanUpdated();
+setPlanIds(finalOrder);
+writeStringArray(PLAN_KEY, finalOrder);
+dispatchPlanUpdated();
+
 
       const ts = Date.now();
       setLastOptimizedAt(ts);
