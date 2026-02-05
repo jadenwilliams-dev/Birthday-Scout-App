@@ -111,6 +111,54 @@ async function geocodeClosest(query: string, start: Geo): Promise<Geo> {
   return { lat, lon };
 }
 
+function isZip(s: string) {
+  // Accept 5-digit ZIP or ZIP+4 (12345-6789)
+  return /^\d{5}(-\d{4})?$/.test(s.trim());
+}
+
+async function geocodeZip(zip: string): Promise<Geo> {
+  if (!ORS_KEY) throw new Error("Missing ORS_API_KEY in env");
+
+  const u = new URL("https://api.openrouteservice.org/geocode/search");
+  u.searchParams.set("api_key", ORS_KEY);
+  u.searchParams.set("text", zip);
+  u.searchParams.set("size", "5");
+  u.searchParams.set("boundary.country", "US");
+  u.searchParams.set("layers", "postalcode");
+
+  const res = await fetchWithTimeout(u.toString(), { cache: "no-store" }, 9000);
+  if (!res.ok) throw new Error(`ZIP geocode failed (${res.status})`);
+
+  const data = await res.json();
+  const feats = Array.isArray(data?.features) ? data.features : [];
+  if (!feats.length) throw new Error(`No ZIP result for: ${zip}`);
+
+  const [lon, lat] = feats[0].geometry.coordinates;
+  return { lat, lon };
+}
+
+// ---------- Start geocode for non-zip text (NO Vegas bias) ----------
+async function geocodeStartText(query: string): Promise<Geo> {
+  if (!ORS_KEY) throw new Error("Missing ORS_API_KEY in env");
+
+  const u = new URL("https://api.openrouteservice.org/geocode/search");
+  u.searchParams.set("api_key", ORS_KEY);
+  u.searchParams.set("text", query);
+  u.searchParams.set("size", "5");
+  u.searchParams.set("boundary.country", "US");
+  u.searchParams.set("layers", "locality,borough,neighbourhood,county,region,address,venue,postalcode");
+
+  const res = await fetchWithTimeout(u.toString(), { cache: "no-store" }, 9000);
+  if (!res.ok) throw new Error(`Start geocode failed (${res.status})`);
+
+  const data = await res.json();
+  const feats = Array.isArray(data?.features) ? data.features : [];
+  if (!feats.length) throw new Error(`No start result for: ${query}`);
+
+  const [lon, lat] = feats[0].geometry.coordinates;
+  return { lat, lon };
+}
+
 // ---------- ORS matrix (start -> each stop) ----------
 async function matrixFromStart(start: Geo, stops: Geo[]) {
   if (!ORS_KEY) throw new Error("Missing ORS_API_KEY in env");
@@ -291,9 +339,15 @@ export async function POST(req: Request) {
       start = { lat: body.startCoords.lat, lon: body.startCoords.lon };
       startSource = "gps";
     } else if (body.startQuery && body.startQuery.trim()) {
-      const vegasSeed = { lat: 36.1699, lon: -115.1398 };
-      start = await geocodeClosest(`${body.startQuery.trim()} United States`, vegasSeed);
-      startSource = "zip";
+      const q = body.startQuery.trim();
+
+      if (isZip(q)) {
+        start = await geocodeZip(q); // ✅ ZIP (or ZIP+4) → coords
+        startSource = "zip";
+      } else {
+        start = await geocodeStartText(q); // ✅ text start WITHOUT Vegas bias
+        startSource = "zip";
+      }
     } else {
       return NextResponse.json({ optimized: false, note: "Missing start (coords or zip)" }, { status: 400 });
     }
