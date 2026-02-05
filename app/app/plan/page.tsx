@@ -16,24 +16,13 @@ type Deal = {
   freebie?: string;
   conditions?: string;
   link?: string;
-  // optional (some of your deals may have this)
   mapQuery?: string;
 };
 
+// Python adapter response shape (simple)
 type OptimizeResp = {
-  orderedIds?: string[];
-  destinationId?: string;
   optimized?: boolean;
-  note?: string;
-  routeDistance_m?: number;
-  routeDuration_s?: number;
-  resolvedStops?: { id: string; lat: number; lon: number }[];
-};
-
-type PreviewResp = {
-  preview?: boolean;
-  suggestedDestinationId?: string;
-  stops?: { id: string; dist_mi: number; eta_min?: number; lat?: number; lon?: number }[];
+  orderedIds?: string[];
   note?: string;
 };
 
@@ -442,13 +431,6 @@ export default function PlanPage() {
   const [optimizing, setOptimizing] = useState<boolean>(false);
   const [shareBusy, setShareBusy] = useState<boolean>(false);
 
-  // modal state (kept; UI not shown in your paste, but state can stay)
-  const [showDestModal, setShowDestModal] = useState<boolean>(false);
-  const [modalChoice, setModalChoice] = useState<string>("");
-  const [modalDistances, setModalDistances] = useState<Record<string, number>>({});
-  const [modalEtas, setModalEtas] = useState<Record<string, number>>({});
-  const [loadingPreview, setLoadingPreview] = useState<boolean>(false);
-
   useEffect(() => {
     const p = readStringArray(PLAN_KEY);
     const c = readStringArray(CLAIMED_KEY);
@@ -509,7 +491,6 @@ export default function PlanPage() {
   }, []);
 
   function buildStopQuery(name: string): string {
-    // Keep it clean. Backend finds nearest to start coords via OSM now.
     return (name || "").trim();
   }
 
@@ -700,7 +681,6 @@ export default function PlanPage() {
     dispatchPlanUpdated();
   }
 
-  // ✅ FIXED: only ONE function, no Vegas hardcode
   function openStopInMaps(d: Deal) {
     const q = buildStopQuery((d.mapQuery || d.name) ?? d.name);
     openPlaceInMaps(q);
@@ -781,59 +761,27 @@ export default function PlanPage() {
     setStatus("Destination cleared.");
   }
 
-  function getStartPayload(): { startCoords?: { lat: number; lon: number }; startQuery?: string } | null {
-    const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
-
-    // If user chose GEO mode, use GPS coords if present
-    if (mode === "geo") {
-      const raw = localStorage.getItem(START_KEY);
-      if (raw) {
-        try {
-          const s = JSON.parse(raw);
-          if (typeof s?.lat === "number" && typeof s?.lon === "number") {
-            return { startCoords: { lat: s.lat, lon: s.lon } };
-          }
-        } catch {}
-      }
-    }
-
-    // Otherwise, ZIP
-    const z = (localStorage.getItem(ZIP_KEY) || "").trim();
-    if (z) return { startQuery: z };
-
-    return null;
-  }
-
-  async function doOptimize(destOverride?: string) {
-    const start = getStartPayload();
-    if (!start) {
-      setError('Set a start first: click "Use my location" or enter a ZIP.');
-      return;
-    }
+  // ---------------------------
+  // ✅ NEW OPTIMIZER (Python)
+  // ---------------------------
+  async function doOptimize() {
+    setError("");
+    setStatus("");
 
     if (activeItems.length < 2) {
       setError("Unskip at least 2 stops to optimize.");
       return;
     }
 
-    // ✅ FIXED: use mapQuery when available
-    const stops = activeItems.map((d) => ({
-      id: d.id,
-      query: buildStopQuery(d.mapQuery || d.name),
-    }));
-
-    const destToSend =
-      (destOverride && planIds.includes(destOverride) ? destOverride : "") ||
-      (destinationId && planIds.includes(destinationId) ? destinationId : undefined);
-
-    const safeDestToSend = destToSend && skippedSet.has(destToSend) ? undefined : destToSend;
+    // Python adapter expects ids only
+    const ids = activeItems.map((d) => d.id);
 
     setOptimizing(true);
     try {
       const res = await fetch("/api/optimize-route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...start, destinationId: safeDestToSend, stops }),
+        body: JSON.stringify({ ids }),
       });
 
       const data = (await res.json()) as OptimizeResp;
@@ -843,132 +791,33 @@ export default function PlanPage() {
         return;
       }
 
-      setStatus(data.note || "Optimized ✅");
-      tryConfetti();
-
-      if (Array.isArray(data.resolvedStops)) {
-        const map: Record<string, { lat: number; lon: number }> = {};
-        for (const s of data.resolvedStops) {
-          if (s && typeof s.id === "string" && typeof s.lat === "number" && typeof s.lon === "number") {
-            map[s.id] = { lat: s.lat, lon: s.lon };
-          }
-        }
-        localStorage.setItem(RESOLVED_KEY, JSON.stringify(map));
-      }
-
-      if (data.destinationId && data.destinationId !== destinationId) {
-        setDestinationId(data.destinationId);
-        localStorage.setItem(DEST_KEY, data.destinationId);
-      }
-
       const orderedIds = data.orderedIds;
 
-// ✅ APPLY optimized order to the actual plan list (this updates the UI)
-setPlanIds((prev) => {
-  const orderedSet = new Set(orderedIds);
+      // ✅ Apply optimized order ONCE (keep anything not included at the end)
+      setPlanIds((prev) => {
+        const orderedSet = new Set(orderedIds);
+        const rest = prev.filter((id) => !orderedSet.has(id));
+        const finalOrder = [...orderedIds, ...rest];
 
-  // keep anything not in the optimized route at the end (skipped, etc.)
-  const rest = prev.filter((id) => !orderedSet.has(id));
+        writeStringArray(PLAN_KEY, finalOrder);
+        dispatchPlanUpdated();
+        return finalOrder;
+      });
 
-  const finalOrder = [...orderedIds, ...rest];
-  writeStringArray(PLAN_KEY, finalOrder);
-  dispatchPlanUpdated();
-  return finalOrder;
-});
-
-// keep route order for routeSummary/next stop UI
-setLastRouteOrder(orderedIds);
-writeStringArray(LAST_ROUTE_ORDER, orderedIds);
-
-
-
+      // keep route order for routeSummary/next stop UI
       setLastRouteOrder(orderedIds);
       writeStringArray(LAST_ROUTE_ORDER, orderedIds);
-
-const planSet = new Set(planIds);
-const cleaned = orderedIds.filter((id) => planSet.has(id));
-
-const remaining = planIds.filter((id) => !cleaned.includes(id));
-const finalOrder = [...cleaned, ...remaining];
-
-setPlanIds(finalOrder);
-writeStringArray(PLAN_KEY, finalOrder);
-dispatchPlanUpdated();
-
 
       const ts = Date.now();
       setLastOptimizedAt(ts);
       writeNum(LAST_OPT_KEY, ts);
 
-      if (typeof data.routeDistance_m === "number" && isFinite(data.routeDistance_m)) {
-        setLastRouteDistanceM(data.routeDistance_m);
-        writeNum(LAST_ROUTE_DIST_M, data.routeDistance_m);
-      }
-
-      if (typeof data.routeDuration_s === "number" && isFinite(data.routeDuration_s)) {
-        setLastRouteDurationS(data.routeDuration_s);
-        writeNum(LAST_ROUTE_DUR_S, data.routeDuration_s);
-      }
+      setStatus(data.note || "Optimized ✅");
+      tryConfetti();
     } catch (e: any) {
       setError(e?.message || "Optimization error.");
     } finally {
       setOptimizing(false);
-    }
-  }
-
-  async function fetchPreviewAndOpenModal() {
-    const start = getStartPayload();
-    if (!start) {
-      setError('Set a start first: click "Use my location" or enter a ZIP.');
-      return;
-    }
-
-    if (activeItems.length < 2) {
-      setError("Unskip at least 2 stops to optimize.");
-      return;
-    }
-
-    // ✅ FIXED: use mapQuery when available
-    const stops = activeItems.map((d) => ({
-      id: d.id,
-      query: buildStopQuery(d.mapQuery || d.name),
-    }));
-
-    setLoadingPreview(true);
-    setModalDistances({});
-    setModalEtas({});
-    try {
-      const res = await fetch("/api/optimize-route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...start, previewOnly: true, stops }),
-      });
-
-      const data = (await res.json()) as PreviewResp;
-
-      if (!res.ok || !data?.preview || !Array.isArray(data?.stops)) {
-        setError(data?.note || "Could not compute preview.");
-        return;
-      }
-
-      const distMap: Record<string, number> = {};
-      const etaMap: Record<string, number> = {};
-
-      for (const s of data.stops) {
-        distMap[s.id] = s.dist_mi;
-        if (typeof s.eta_min === "number" && isFinite(s.eta_min)) etaMap[s.id] = s.eta_min;
-      }
-
-      setModalDistances(distMap);
-      setModalEtas(etaMap);
-
-      const suggested = data.suggestedDestinationId || activeItems[activeItems.length - 1]?.id || "";
-      setModalChoice(suggested);
-      setShowDestModal(true);
-    } catch (e: any) {
-      setError(e?.message || "Preview error.");
-    } finally {
-      setLoadingPreview(false);
     }
   }
 
@@ -981,17 +830,7 @@ dispatchPlanUpdated();
       return;
     }
 
-    if (destinationId && planIds.includes(destinationId) && !skippedSet.has(destinationId)) {
-      await doOptimize();
-      return;
-    }
-
-    if (promptOff) {
-      await doOptimize();
-      return;
-    }
-
-    await fetchPreviewAndOpenModal();
+    await doOptimize();
   }
 
   const routeLine = useMemo(() => {
@@ -1244,7 +1083,6 @@ dispatchPlanUpdated();
 
             {/* Right card */}
             <section className="flex flex-col gap-4 lg:-translate-y-34 lg:pl-2">
-              {/* ✅ If there are no deals yet, show the empty-state card */}
               {!hasAnyPlanned ? (
                 <div className={`${GlassCard} ${NextRimGlow} p-6 lg:p-8 w-full`}>
                   <div className="text-[12px] uppercase tracking-wider text-zinc-400">Get started</div>
@@ -1299,7 +1137,6 @@ dispatchPlanUpdated();
                 )
               ) : null}
 
-              {/* ✅ Hide reset claimed when there are no planned deals */}
               {hasAnyPlanned ? (
                 <div className="flex justify-end w-full">
                   <button
@@ -1650,18 +1487,18 @@ dispatchPlanUpdated();
 
                   <button
                     onClick={optimizeRoute}
-                    disabled={optimizing || loadingPreview || shareBusy}
+                    disabled={optimizing || shareBusy}
                     className={
                       "rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm text-zinc-100 " +
                       "hover:bg-white/5 disabled:opacity-50 shadow-[0_14px_45px_rgba(0,0,0,0.60)] transition"
                     }
                   >
-                    {loadingPreview ? "Checking ETA..." : optimizing ? "Optimizing..." : "Optimize"}
+                    {optimizing ? "Optimizing..." : "Optimize"}
                   </button>
 
                   <button
                     onClick={shareRoute}
-                    disabled={optimizing || loadingPreview || shareBusy}
+                    disabled={optimizing || shareBusy}
                     className={
                       "rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm text-zinc-100 " +
                       "hover:bg-white/5 disabled:opacity-50 shadow-[0_14px_45px_rgba(0,0,0,0.60)] transition"
