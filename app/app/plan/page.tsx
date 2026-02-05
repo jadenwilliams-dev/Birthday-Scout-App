@@ -19,11 +19,14 @@ type Deal = {
   mapQuery?: string;
 };
 
-// Python adapter response shape (simple)
 type OptimizeResp = {
   optimized?: boolean;
   orderedIds?: string[];
+  destinationId?: string;
   note?: string;
+  routeDistance_m?: number;
+  routeDuration_s?: number;
+  resolvedStops?: { id: string; lat: number; lon: number; pickedFrom?: string }[];
 };
 
 const PLAN_KEY = "bs_plan";
@@ -41,7 +44,6 @@ const LAST_ROUTE_DUR_S = "bs_last_route_duration_s";
 const LAST_ROUTE_ORDER = "bs_last_route_order";
 
 const SKIPPED_KEY = "bs_skipped";
-
 const AUTO_ADVANCE_OPEN_KEY = "bs_auto_advance_open_maps";
 const RESOLVED_KEY = "bs_resolved_stops";
 
@@ -59,11 +61,9 @@ function readStringArray(key: string): string[] {
     return [];
   }
 }
-
 function writeStringArray(key: string, arr: string[]) {
   localStorage.setItem(key, JSON.stringify(arr));
 }
-
 function readBool(key: string): boolean {
   try {
     return localStorage.getItem(key) === "true";
@@ -71,11 +71,9 @@ function readBool(key: string): boolean {
     return false;
   }
 }
-
 function writeBool(key: string, val: boolean) {
   localStorage.setItem(key, val ? "true" : "false");
 }
-
 function readNum(key: string): number | null {
   try {
     const raw = localStorage.getItem(key);
@@ -86,7 +84,6 @@ function readNum(key: string): number | null {
     return null;
   }
 }
-
 function writeNum(key: string, val: number) {
   localStorage.setItem(key, String(val));
 }
@@ -104,7 +101,6 @@ function formatWhen(ts: number) {
 function metersToMiles(m: number) {
   return m / 1609.34;
 }
-
 function secondsToMinutes(s: number) {
   return Math.max(1, Math.round(s / 60));
 }
@@ -113,7 +109,6 @@ function isProbablyIOS() {
   if (typeof navigator === "undefined") return false;
   return /iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
-
 function openPlaceInMaps(query: string) {
   const q = encodeURIComponent(query);
   const url = isProbablyIOS()
@@ -160,7 +155,7 @@ function normalizeZip(input: string) {
   return input.replace(/\D/g, "").slice(0, 5);
 }
 
-/** ✅ Pull zip from Supabase profiles (per-user) */
+/** Pull zip from Supabase profiles (per-user) */
 async function fetchZipFromDB(): Promise<string> {
   const { data } = await supabase.auth.getUser();
   const user = data.user;
@@ -177,7 +172,7 @@ async function fetchZipFromDB(): Promise<string> {
   return z || "";
 }
 
-/** ✅ Write zip to Supabase profiles (per-user) */
+/** Write zip to Supabase profiles (per-user) */
 async function saveZipToDB(nextZip: string) {
   const { data } = await supabase.auth.getUser();
   const user = data.user;
@@ -239,9 +234,6 @@ function LocationGlyph() {
   );
 }
 
-/**
- * Brand logo mapping (uses /public/brands/*.png)
- */
 function getBrandLogoSrc(d: Deal): string | null {
   const id = (d.id || "").toLowerCase();
   const name = (d.name || "").toLowerCase();
@@ -322,7 +314,6 @@ function BrandAvatar({
   );
 }
 
-/** Mock-style rail node */
 function RailNode({ variant }: { variant: "start" | "next" | "claimed" | "skipped" | "normal" }) {
   const base = "relative mt-1 h-4 w-4 rounded-full";
   const core = "absolute inset-0 rounded-full border";
@@ -375,9 +366,6 @@ function RailNode({ variant }: { variant: "start" | "next" | "claimed" | "skippe
   );
 }
 
-/**
- * HERO LOGO (lockup) — matches your inspo.
- */
 function BrandLockup() {
   const candidates = [
     "/brands/lockup.png",
@@ -390,7 +378,6 @@ function BrandLockup() {
   ];
 
   const [idx, setIdx] = useState(0);
-
   if (idx >= candidates.length) return null;
 
   return (
@@ -413,7 +400,8 @@ export default function PlanPage() {
   const [zip, setZip] = useState<string>("");
 
   const [destinationId, setDestinationId] = useState<string>("");
-  const [promptOff, setPromptOff] = useState<boolean>(false);
+  // NOTE: if you don't use this in UI, keep it but avoid lint warnings by prefixing underscore
+  const [_promptOff, setPromptOff] = useState<boolean>(false);
 
   const [hasGPSStart, setHasGPSStart] = useState<boolean>(false);
 
@@ -456,7 +444,6 @@ export default function PlanPage() {
       }
     } catch {}
 
-    // ✅ DB-first zip (per-user). Fallback to localStorage if DB empty.
     (async () => {
       const dbZip = await fetchZipFromDB();
       if (dbZip) {
@@ -470,7 +457,6 @@ export default function PlanPage() {
     })();
   }, []);
 
-  // ✅ When profile saves, refresh zip here too.
   useEffect(() => {
     async function refresh() {
       const dbZip = await fetchZipFromDB();
@@ -526,7 +512,6 @@ export default function PlanPage() {
     return items.filter((d) => !skippedSet.has(d.id));
   }, [items, skippedSet]);
 
-  // ✅ EMPTY STATE FLAG
   const hasAnyPlanned = items.length > 0;
 
   const claimedCount = useMemo(() => {
@@ -551,7 +536,6 @@ export default function PlanPage() {
     window.dispatchEvent(new Event(PLAN_UPDATED_EVENT));
   }
 
-  // ✅ Update zip locally + in DB + notify other pages
   function saveZip(next: string) {
     const z = normalizeZip(next);
     setZip(z);
@@ -559,14 +543,10 @@ export default function PlanPage() {
     try {
       localStorage.setItem(ZIP_KEY, z);
 
-      // ✅ force ZIP mode when user types a ZIP
       localStorage.setItem(START_MODE_KEY, "zip");
-
-      // ✅ clear cached GPS start so nothing leaks
       localStorage.removeItem(START_KEY);
       setHasGPSStart(false);
 
-      // ✅ ZIP changed → clear cached resolved stops + old route stats/order
       localStorage.removeItem(RESOLVED_KEY);
       localStorage.removeItem(LAST_ROUTE_ORDER);
       localStorage.removeItem(LAST_OPT_KEY);
@@ -579,7 +559,6 @@ export default function PlanPage() {
       setLastRouteDurationS(null);
     } catch {}
 
-    // fire-and-forget DB save (so Profile stays in sync too)
     (async () => {
       try {
         await saveZipToDB(z);
@@ -602,8 +581,6 @@ export default function PlanPage() {
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
         localStorage.setItem(START_KEY, JSON.stringify({ lat, lon }));
-
-        // ✅ force geo mode
         localStorage.setItem(START_MODE_KEY, "geo");
 
         setHasGPSStart(true);
@@ -611,16 +588,12 @@ export default function PlanPage() {
         setError("");
       },
       (err) => {
-        // ✅ clear any stale GPS so we fall back to ZIP
         try {
           localStorage.removeItem(START_KEY);
-
-          // ✅ ZIP mode (so optimize uses the zip)
           localStorage.setItem(START_MODE_KEY, "zip");
         } catch {}
 
         setHasGPSStart(false);
-
         const msg = err?.message || "Could not access your location.";
         setError(`Location not available. Using ZIP instead. (${msg})`);
       },
@@ -686,13 +659,28 @@ export default function PlanPage() {
     openPlaceInMaps(q);
   }
 
-  function computeNextStop(prospectiveClaimed: Set<string>): Deal | null {
+  function computeNextStop(prospectiveClaimed: Set<string>, routeSummary: Deal[] | null): Deal | null {
     const candidates = routeSummary && routeSummary.length ? routeSummary : activeItems;
     for (const d of candidates) {
       if (!prospectiveClaimed.has(d.id) && !skippedSet.has(d.id)) return d;
     }
     return null;
   }
+
+  const routeSummary = useMemo(() => {
+    if (!lastRouteOrder || lastRouteOrder.length === 0) return null;
+
+    const byId = new Map<string, Deal>();
+    for (const d of ALL_DEALS as Deal[]) byId.set(d.id, d);
+
+    const orderedDeals = lastRouteOrder
+      .filter((id) => !skippedSet.has(id))
+      .map((id) => byId.get(id))
+      .filter(Boolean) as Deal[];
+
+    if (orderedDeals.length === 0) return null;
+    return orderedDeals;
+  }, [lastRouteOrder, skippedSet]);
 
   function toggleClaim(id: string) {
     const set = new Set(claimedIds);
@@ -707,12 +695,9 @@ export default function PlanPage() {
 
     if (!wasClaimed) {
       tryConfetti();
-      const nextStop2 = computeNextStop(set);
-      if (nextStop2) {
-        setStatus(`Claimed ✅ Next stop: ${nextStop2.name}`);
-      } else {
-        setStatus("Claimed ✅ No next stop — everything is claimed or skipped 🎉");
-      }
+      const nextStop2 = computeNextStop(set, routeSummary);
+      if (nextStop2) setStatus(`Claimed ✅ Next stop: ${nextStop2.name}`);
+      else setStatus("Claimed ✅ No next stop — everything is claimed or skipped 🎉");
     }
   }
 
@@ -761,27 +746,57 @@ export default function PlanPage() {
     setStatus("Destination cleared.");
   }
 
-  // ---------------------------
-  // ✅ NEW OPTIMIZER (Python)
-  // ---------------------------
-  async function doOptimize() {
-    setError("");
-    setStatus("");
+  // ✅ THIS WAS MISSING IN YOUR FILE
+  function getStartPayload(): { startCoords?: { lat: number; lon: number }; startQuery?: string } | null {
+    const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
+
+    if (mode === "geo") {
+      const raw = localStorage.getItem(START_KEY);
+      if (raw) {
+        try {
+          const s = JSON.parse(raw);
+          if (typeof s?.lat === "number" && typeof s?.lon === "number") {
+            return { startCoords: { lat: s.lat, lon: s.lon } };
+          }
+        } catch {}
+      }
+    }
+
+    const z = (localStorage.getItem(ZIP_KEY) || "").trim();
+    if (z) return { startQuery: z };
+
+    return null;
+  }
+
+  async function doOptimize(destOverride?: string) {
+    const start = getStartPayload();
+    if (!start) {
+      setError('Set a start first: click "Use my location" or enter a ZIP.');
+      return;
+    }
 
     if (activeItems.length < 2) {
       setError("Unskip at least 2 stops to optimize.");
       return;
     }
 
-    // Python adapter expects ids only
-    const ids = activeItems.map((d) => d.id);
+    const stops = activeItems.map((d) => ({
+      id: d.id,
+      query: buildStopQuery(d.mapQuery || d.name),
+    }));
+
+    const destToSend =
+      (destOverride && planIds.includes(destOverride) ? destOverride : "") ||
+      (destinationId && planIds.includes(destinationId) ? destinationId : undefined);
+
+    const safeDestToSend = destToSend && skippedSet.has(destToSend) ? undefined : destToSend;
 
     setOptimizing(true);
     try {
       const res = await fetch("/api/optimize-route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
+        body: JSON.stringify({ ...start, destinationId: safeDestToSend, stops }),
       });
 
       const data = (await res.json()) as OptimizeResp;
@@ -791,9 +806,28 @@ export default function PlanPage() {
         return;
       }
 
+      setStatus(data.note || "Optimized ✅");
+      tryConfetti();
+
+      // cache resolved coords (OpenRouteButton reads this)
+      if (Array.isArray(data.resolvedStops)) {
+        const map: Record<string, { lat: number; lon: number }> = {};
+        for (const s of data.resolvedStops) {
+          if (s && typeof s.id === "string" && typeof s.lat === "number" && typeof s.lon === "number") {
+            map[s.id] = { lat: s.lat, lon: s.lon };
+          }
+        }
+        localStorage.setItem(RESOLVED_KEY, JSON.stringify(map));
+      }
+
+      if (data.destinationId && data.destinationId !== destinationId) {
+        setDestinationId(data.destinationId);
+        localStorage.setItem(DEST_KEY, data.destinationId);
+      }
+
       const orderedIds = data.orderedIds;
 
-      // ✅ Apply optimized order ONCE (keep anything not included at the end)
+      // ✅ Apply optimized order ONCE
       setPlanIds((prev) => {
         const orderedSet = new Set(orderedIds);
         const rest = prev.filter((id) => !orderedSet.has(id));
@@ -804,7 +838,6 @@ export default function PlanPage() {
         return finalOrder;
       });
 
-      // keep route order for routeSummary/next stop UI
       setLastRouteOrder(orderedIds);
       writeStringArray(LAST_ROUTE_ORDER, orderedIds);
 
@@ -812,8 +845,15 @@ export default function PlanPage() {
       setLastOptimizedAt(ts);
       writeNum(LAST_OPT_KEY, ts);
 
-      setStatus(data.note || "Optimized ✅");
-      tryConfetti();
+      if (typeof data.routeDistance_m === "number" && isFinite(data.routeDistance_m)) {
+        setLastRouteDistanceM(data.routeDistance_m);
+        writeNum(LAST_ROUTE_DIST_M, data.routeDistance_m);
+      }
+
+      if (typeof data.routeDuration_s === "number" && isFinite(data.routeDuration_s)) {
+        setLastRouteDurationS(data.routeDuration_s);
+        writeNum(LAST_ROUTE_DUR_S, data.routeDuration_s);
+      }
     } catch (e: any) {
       setError(e?.message || "Optimization error.");
     } finally {
@@ -824,12 +864,10 @@ export default function PlanPage() {
   async function optimizeRoute() {
     setError("");
     setStatus("");
-
     if (activeItems.length < 2) {
       setError("Unskip at least 2 stops to optimize.");
       return;
     }
-
     await doOptimize();
   }
 
@@ -841,21 +879,6 @@ export default function PlanPage() {
     if (typeof lastRouteDistanceM === "number") parts.push(`${metersToMiles(lastRouteDistanceM).toFixed(1)} mi`);
     return parts.join(" • ");
   }, [lastRouteDurationS, lastRouteDistanceM]);
-
-  const routeSummary = useMemo(() => {
-    if (!lastRouteOrder || lastRouteOrder.length === 0) return null;
-
-    const byId = new Map<string, Deal>();
-    for (const d of ALL_DEALS as Deal[]) byId.set(d.id, d);
-
-    const orderedDeals = lastRouteOrder
-      .filter((id) => !skippedSet.has(id))
-      .map((id) => byId.get(id))
-      .filter(Boolean) as Deal[];
-
-    if (orderedDeals.length === 0) return null;
-    return orderedDeals;
-  }, [lastRouteOrder, skippedSet]);
 
   const nextStop: Deal | null = useMemo(() => {
     const candidates = routeSummary && routeSummary.length ? routeSummary : activeItems;
@@ -998,19 +1021,15 @@ export default function PlanPage() {
       <div className="relative z-20 px-6 pt-0 pb-[190px]">
         <div className="h-[72px]" />
         <div className={NARROW}>
-          {/* Header / hero */}
           <header className="mb-8">
             <BrandLockup />
-
             <div className="pl-10 lg:pl-30 -mt-24">
               <div className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-black/35 px-3 py-1 text-xs text-zinc-300">
                 <IconDot on={hasGPSStart || !!zip.trim()} />
                 Trip builder
               </div>
 
-              <h1 className="mt-2 text-[46px] leading-[1.03] font-semibold tracking-tight">
-                Your birthday route
-              </h1>
+              <h1 className="mt-2 text-[46px] leading-[1.03] font-semibold tracking-tight">Your birthday route</h1>
 
               <p className="mt-2 max-w-[640px] text-[19px] leading-snug text-zinc-300/90">
                 Plan stops, skip what you don’t want today, and
@@ -1019,9 +1038,7 @@ export default function PlanPage() {
             </div>
           </header>
 
-          {/* HERO CARDS */}
           <div className="grid gap-6 lg:gap-8 lg:grid-cols-2 items-start max-w-[980px] mx-auto">
-            {/* Summary (left) */}
             <section className={`${GlassCard} p-7 lg:p-8 lg:translate-y-10`}>
               <div className="text-[12px] uppercase tracking-wider text-zinc-500">Summary</div>
 
@@ -1081,7 +1098,6 @@ export default function PlanPage() {
               </div>
             </section>
 
-            {/* Right card */}
             <section className="flex flex-col gap-4 lg:-translate-y-34 lg:pl-2">
               {!hasAnyPlanned ? (
                 <div className={`${GlassCard} ${NextRimGlow} p-6 lg:p-8 w-full`}>
@@ -1162,7 +1178,6 @@ export default function PlanPage() {
             </div>
           ) : null}
 
-          {/* Rail + Stops */}
           {items.length === 0 ? (
             <section className={`${GlassSection} mt-7 p-10 text-center text-zinc-300`}>
               Add deals from the Deals page to start planning your birthday run 🎉
@@ -1197,12 +1212,7 @@ export default function PlanPage() {
               <div className="relative px-5 py-5">
                 <div className="pointer-events-none absolute left-[30px] top-6 bottom-6 w-[6px] -translate-x-1/2 bg-emerald-200/10 blur-[6px]" />
                 <div className="pointer-events-none absolute left-[30px] top-6 bottom-6 w-px bg-emerald-200/22" />
-                <div className="pointer-events-none absolute left-[30px] top-6 h-40 w-px bg-gradient-to-b from-emerald-200/35 to-transparent" />
-                <div className="pointer-events-none absolute left-[30px] bottom-6 h-40 w-px bg-gradient-to-t from-emerald-200/18 to-transparent" />
-                <div className="pointer-events-none absolute left-[30px] bottom-[54px] h-2 w-2 -translate-x-1/2 rounded-full bg-emerald-200/70 shadow-[0_0_18px_rgba(16,185,129,0.45)]" />
-                <div className="pointer-events-none absolute left-[30px] bottom-[38px] h-2 w-2 -translate-x-1/2 rounded-full bg-emerald-200/55 shadow-[0_0_14px_rgba(16,185,129,0.35)]" />
 
-                {/* start node */}
                 <div className="mb-5 flex items-start gap-4">
                   <div className="relative w-10 flex justify-center -translate-x-2.5">
                     <RailNode variant="start" />
@@ -1245,7 +1255,6 @@ export default function PlanPage() {
                   </div>
                 </div>
 
-                {/* deals list */}
                 <div className="space-y-4">
                   {items.map((d, idx) => {
                     const isClaimed = claimedSet.has(d.id);
@@ -1278,157 +1287,77 @@ export default function PlanPage() {
                         </div>
 
                         <div className="min-w-0 flex-1">
-                          {isNext ? (
-                            <div className={`${GlassCard} ${NeonRim} p-4`}>
-                              <div className="relative">
-                                <div className="flex items-start justify-between gap-4">
+                          <div
+                            className={`${GlassCard} p-4 ${isSkipped ? "opacity-70" : ""} ${
+                              isClaimed ? "opacity-85" : ""
+                            } ${isNext ? NeonRim : ""}`}
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-[11px] text-zinc-500">Stop {idx + 1}</span>
+                                  {statusPill}
+                                  {isDest ? <Pill>Final</Pill> : null}
+                                  {isNext ? <Pill tone="good">Up next</Pill> : null}
+                                </div>
+
+                                <div className="mt-3 flex items-center gap-3">
+                                  <BrandAvatar deal={d} dim={isClaimed || isSkipped} size={40} />
                                   <div className="min-w-0">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <span className="text-[11px] text-zinc-500">Stop {idx + 1}</span>
-                                      {statusPill}
-                                      {isDest ? <Pill>Final</Pill> : null}
-                                      <Pill tone="good">Up next</Pill>
-                                    </div>
-
-                                    <div className="mt-3 flex items-center gap-3">
-                                      <BrandAvatar deal={d} dim={isClaimed || isSkipped} size={40} />
-                                      <div className="min-w-0">
-                                        <div className="text-base font-semibold truncate">{d.name}</div>
-                                        {d.freebie ? <div className="mt-1 text-sm text-zinc-200">{d.freebie}</div> : null}
-                                        {d.conditions ? (
-                                          <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div>
-                                        ) : null}
-                                      </div>
-                                    </div>
-
-                                    <div className="mt-4 flex flex-wrap gap-2">
-                                      <button
-                                        onClick={() => toggleClaim(d.id)}
-                                        className="rounded-full border border-emerald-200/18 bg-black/35 px-3.5 py-2 text-sm text-emerald-50 hover:bg-white/5"
-                                      >
-                                        {isClaimed ? "Unclaim" : "Mark claimed"}
-                                      </button>
-
-                                      <button
-                                        onClick={() => toggleSkipped(d.id)}
-                                        className={`${ActionBtn} border-white/12 bg-black/35`}
-                                      >
-                                        {isSkipped ? "Unskip" : "Skip today"}
-                                      </button>
-
-                                      {!isDest ? (
-                                        <button
-                                          onClick={() => setAsDestination(d.id)}
-                                          disabled={isSkipped}
-                                          className={`${ActionBtn} border-white/12 bg-black/35 disabled:opacity-50`}
-                                          title={isSkipped ? "Unskip it first to set as destination" : "Make destination"}
-                                        >
-                                          Make destination
-                                        </button>
-                                      ) : (
-                                        <button
-                                          onClick={clearDestination}
-                                          className={`${ActionBtn} border-white/12 bg-black/35`}
-                                        >
-                                          Clear destination
-                                        </button>
-                                      )}
-
-                                      <button
-                                        onClick={() => removeFromPlan(d.id)}
-                                        className={`${ActionBtn} border-red-500/25 bg-red-500/8 text-red-200 hover:bg-red-500/12`}
-                                      >
-                                        Remove
-                                      </button>
-                                    </div>
+                                    <div className="text-base font-semibold truncate">{d.name}</div>
+                                    {d.freebie ? <div className="mt-1 text-sm text-zinc-200">{d.freebie}</div> : null}
+                                    {d.conditions ? <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div> : null}
                                   </div>
+                                </div>
+
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                  <button
+                                    onClick={() => toggleClaim(d.id)}
+                                    className="rounded-full border border-emerald-200/18 bg-black/35 px-3.5 py-2 text-sm text-emerald-50 hover:bg-white/5"
+                                  >
+                                    {isClaimed ? "Unclaim" : "Mark claimed"}
+                                  </button>
 
                                   <button
-                                    onClick={() => openStopInMaps(d)}
-                                    className="shrink-0 rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm hover:bg-white/5"
-                                    title="Open this stop in Maps"
+                                    onClick={() => toggleSkipped(d.id)}
+                                    className={`${ActionBtn} border-white/12 bg-black/35`}
                                   >
-                                    Maps
+                                    {isSkipped ? "Unskip" : "Skip today"}
+                                  </button>
+
+                                  {!isDest ? (
+                                    <button
+                                      onClick={() => setAsDestination(d.id)}
+                                      disabled={isSkipped}
+                                      className={`${ActionBtn} border-white/12 bg-black/35 disabled:opacity-50`}
+                                      title={isSkipped ? "Unskip it first to set as destination" : "Make destination"}
+                                    >
+                                      Make destination
+                                    </button>
+                                  ) : (
+                                    <button onClick={clearDestination} className={`${ActionBtn} border-white/12 bg-black/35`}>
+                                      Clear destination
+                                    </button>
+                                  )}
+
+                                  <button
+                                    onClick={() => removeFromPlan(d.id)}
+                                    className={`${ActionBtn} border-red-500/25 bg-red-500/8 text-red-200 hover:bg-red-500/12`}
+                                  >
+                                    Remove
                                   </button>
                                 </div>
                               </div>
+
+                              <button
+                                onClick={() => openStopInMaps(d)}
+                                className="shrink-0 rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm hover:bg-white/5"
+                                title="Open this stop in Maps"
+                              >
+                                Maps
+                              </button>
                             </div>
-                          ) : (
-                            <div
-                              className={`${GlassCard} p-4 ${isSkipped ? "opacity-70" : ""} ${
-                                isClaimed ? "opacity-85" : ""
-                              }`}
-                            >
-                              <div className="flex items-start justify-between gap-4">
-                                <div className="min-w-0">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <span className="text-[11px] text-zinc-500">Stop {idx + 1}</span>
-                                    {statusPill}
-                                    {isDest ? <Pill>Final</Pill> : null}
-                                  </div>
-
-                                  <div className="mt-3 flex items-center gap-3">
-                                    <BrandAvatar deal={d} dim={isClaimed || isSkipped} size={40} />
-                                    <div className="min-w-0">
-                                      <div className="text-base font-semibold truncate">{d.name}</div>
-                                      {d.freebie ? <div className="mt-1 text-sm text-zinc-200">{d.freebie}</div> : null}
-                                      {d.conditions ? (
-                                        <div className="mt-1 text-sm text-zinc-500">{d.conditions}</div>
-                                      ) : null}
-                                    </div>
-                                  </div>
-
-                                  <div className="mt-4 flex flex-wrap gap-2">
-                                    <button
-                                      onClick={() => toggleClaim(d.id)}
-                                      className="rounded-full border border-emerald-200/18 bg-black/35 px-3.5 py-2 text-sm text-emerald-50 hover:bg-white/5"
-                                    >
-                                      {isClaimed ? "Unclaim" : "Mark claimed"}
-                                    </button>
-
-                                    <button
-                                      onClick={() => toggleSkipped(d.id)}
-                                      className="rounded-full border border-white/12 bg-black/35 px-3.5 py-2 text-sm hover:bg-white/5"
-                                    >
-                                      {isSkipped ? "Unskip" : "Skip today"}
-                                    </button>
-
-                                    {!isDest ? (
-                                      <button
-                                        onClick={() => setAsDestination(d.id)}
-                                        disabled={isSkipped}
-                                        className="rounded-full border border-white/12 bg-black/35 px-3.5 py-2 text-sm hover:bg-white/5 disabled:opacity-50"
-                                        title={isSkipped ? "Unskip it first to set as destination" : "Make destination"}
-                                      >
-                                        Make destination
-                                      </button>
-                                    ) : (
-                                      <button
-                                        onClick={clearDestination}
-                                        className="rounded-full border border-white/12 bg-black/35 px-3.5 py-2 text-sm hover:bg-white/5"
-                                      >
-                                        Clear destination
-                                      </button>
-                                    )}
-
-                                    <button
-                                      onClick={() => removeFromPlan(d.id)}
-                                      className="rounded-full border border-red-500/25 bg-red-500/8 px-3.5 py-2 text-sm text-red-200 hover:bg-red-500/12"
-                                    >
-                                      Remove
-                                    </button>
-                                  </div>
-                                </div>
-
-                                <button
-                                  onClick={() => openStopInMaps(d)}
-                                  className="shrink-0 rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm hover:bg-white/5"
-                                >
-                                  Maps
-                                </button>
-                              </div>
-                            </div>
-                          )}
+                          </div>
                         </div>
                       </div>
                     );
@@ -1458,7 +1387,6 @@ export default function PlanPage() {
         </div>
       </div>
 
-      {/* ✅ Hide sticky bottom dock when no deals are selected */}
       {hasAnyPlanned ? (
         <div className="fixed inset-x-0 bottom-0 z-50 pointer-events-none">
           <div
@@ -1466,10 +1394,6 @@ export default function PlanPage() {
             style={{ paddingBottom: "calc(18px + env(safe-area-inset-bottom))" }}
           >
             <div className="pointer-events-auto relative rounded-[22px] border border-white/12 bg-black/50 backdrop-blur-md shadow-[0_30px_120px_rgba(0,0,0,0.70)] px-4 py-3">
-              <div className="pointer-events-none absolute inset-x-4 -top-[1px] h-px bg-gradient-to-r from-transparent via-emerald-200/22 to-transparent" />
-              <div className="pointer-events-none absolute inset-x-4 -bottom-[1px] h-px bg-gradient-to-r from-transparent via-emerald-200/14 to-transparent" />
-              <div className="pointer-events-none absolute -top-10 left-10 right-10 h-16 rounded-full bg-emerald-300/10 blur-3xl" />
-
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs text-zinc-300">
                   {routeLine ? (
