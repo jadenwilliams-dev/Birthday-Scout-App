@@ -1,11 +1,17 @@
 // app/app/deals/page.tsx
 "use client";
+// Client page because it uses:
+// - localStorage (plan + profile cache)
+// - window events (profile updates + cross-tab sync)
+// - React state/hooks for filtering + UI interactions
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ALL_DEALS } from "@/app/lib/deals";
 import { supabase } from "@/app/lib/supabaseClient";
 
+// Local Deal type used by this page.
+// (Supports both newer `category` and older `type` fields.)
 type Deal = {
   id: string;
   name: string;
@@ -21,19 +27,25 @@ type Deal = {
   image?: string;
 };
 
+// Minimal profile shape used for displaying birthday + zip in the UI.
 type Profile = {
   birthday: string;
   zip: string;
   displayName?: string;
 };
 
+// localStorage keys + custom event name used across the app
 const PLAN_KEY = "bs_plan";
 const PROFILE_KEY = "bs_profile";
 const PROFILE_UPDATED_EVENT = "bs_profile_updated";
+
+// Fallback ZIP when nothing is saved yet
 const DEFAULT_ZIP = "11111";
 
+// Category filter pills shown on the page
 const CATEGORIES = ["All", "Food", "Drinks", "Dessert", "Other"] as const;
 
+// Small helper to build className strings without messy ternaries
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -42,6 +54,8 @@ function cn(...parts: Array<string | false | null | undefined>) {
    Moved UP via negative margin + reduced page top padding
    Made BIGGER via responsive heights
 */
+// Header logo block for the deals page.
+// This links back to /app/deals and shows your long logo image.
 function DealsTopLogo() {
   return (
     <div className="flex items-center justify-start -mt-28 mb-0 pl-1">
@@ -63,6 +77,8 @@ function DealsTopLogo() {
   );
 }
 
+// Read a JSON array of strings from localStorage safely.
+// If anything is missing or malformed, return [] so the UI never crashes.
 function readStringArray(key: string): string[] {
   try {
     const raw = localStorage.getItem(key);
@@ -75,12 +91,15 @@ function readStringArray(key: string): string[] {
   }
 }
 
+// Write a JSON array of strings to localStorage safely.
 function writeStringArray(key: string, value: string[]) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {}
 }
 
+// Read the cached profile from localStorage with safe defaults.
+// (If profile doesn't exist yet, we still return a usable shape.)
 function readProfileSafe(): Profile {
   try {
     const raw = localStorage.getItem(PROFILE_KEY);
@@ -96,6 +115,7 @@ function readProfileSafe(): Profile {
   }
 }
 
+// Cache profile back into localStorage using consistent keys.
 function writeProfileSafe(p: Profile) {
   try {
     localStorage.setItem(
@@ -109,6 +129,7 @@ function writeProfileSafe(p: Profile) {
   } catch {}
 }
 
+// Normalize deal category fields into one of our filter pill categories.
 function normalizeCategory(d: Deal): (typeof CATEGORIES)[number] {
   const raw = (d.category ?? d.type ?? "Other").trim();
   const lower = raw.toLowerCase();
@@ -120,15 +141,26 @@ function normalizeCategory(d: Deal): (typeof CATEGORIES)[number] {
 }
 
 export default function DealsPage() {
+  // Static deals list (imported from app/lib/deals)
   const deals = (ALL_DEALS as Deal[]) ?? [];
 
+  // Search box text
   const [query, setQuery] = useState("");
+
+  // Selected category filter
   const [cat, setCat] = useState<(typeof CATEGORIES)[number]>("All");
+
+  // Toggle to hide deals already added to the plan
   const [hideAdded, setHideAdded] = useState(false);
+
+  // List of selected deal IDs in the plan (localStorage-backed)
   const [planIds, setPlanIds] = useState<string[]>([]);
+
+  // Cached profile for showing birthday + ZIP at the top
   const [profile, setProfile] = useState<Profile>({ birthday: "", zip: DEFAULT_ZIP });
 
   // load plan ids
+  // On first render, load the user's current plan selections from localStorage.
   useEffect(() => {
     setPlanIds(readStringArray(PLAN_KEY));
   }, []);
@@ -136,62 +168,71 @@ export default function DealsPage() {
   // ✅ load profile from local cache immediately, then refresh from Supabase
   // ✅ also keep it updated when Profile page saves (event/storage)
   useEffect(() => {
+    // Prevent setting state if the component unmounts while requests are in-flight
     let cancelled = false;
 
-    // instant render from localStorage (fast)
+    // Fast path: show whatever we have in localStorage right away
     setProfile(readProfileSafe());
 
+    // Background refresh: pull the freshest profile from Supabase (if signed in)
     async function refreshFromSupabase() {
       try {
+        // Check if there is a logged-in user
         const { data: userRes, error: userErr } = await supabase.auth.getUser();
         if (userErr) return;
         const user = userRes?.user;
         if (!user) return;
 
+        // Fetch profile row from the "profiles" table
         const { data, error } = await supabase
-  .from("profiles")
-  .select("birthday, zip, display_name")
-  .eq("user_id", user.id)
-  .maybeSingle();
-
+          .from("profiles")
+          .select("birthday, zip, display_name")
+          .eq("user_id", user.id)
+          .maybeSingle();
 
         if (error || !data) return;
 
+        // Normalize the DB result into our Profile type
+        // (zip can be a string OR number depending on schema/migrations)
         const next: Profile = {
-  birthday: typeof data?.birthday === "string" ? data.birthday : "",
-  zip:
-    typeof data?.zip === "string"
-      ? data.zip
-      : typeof data?.zip === "number"
-      ? String(data.zip)
-      : DEFAULT_ZIP,
-  displayName: typeof data?.display_name === "string" ? data.display_name : "",
-};
+          birthday: typeof data?.birthday === "string" ? data.birthday : "",
+          zip:
+            typeof data?.zip === "string"
+              ? data.zip
+              : typeof data?.zip === "number"
+              ? String(data.zip)
+              : DEFAULT_ZIP,
+          displayName: typeof data?.display_name === "string" ? data.display_name : "",
+        };
 
-
+        // If we unmounted during the request, do nothing
         if (cancelled) return;
 
+        // Update state + cache so future loads are instant
         setProfile(next);
         writeProfileSafe(next);
       } catch {
-        // ignore
+        // ignore: we can still operate using cached profile data
       }
     }
 
+    // Load profile from cache now, then refresh remotely
     function loadProfile() {
-      // update from local cache right away
       setProfile(readProfileSafe());
-      // then refresh from supabase in background
       refreshFromSupabase();
     }
 
     // initial load
     loadProfile();
 
+    // When profile is updated elsewhere in the app, reload it here too:
+    // - custom event is dispatched after saving on Profile page
+    // - "storage" event fires when localStorage changes in another tab
     const handler = () => loadProfile();
     window.addEventListener(PROFILE_UPDATED_EVENT, handler);
     window.addEventListener("storage", handler);
 
+    // Cleanup listeners + prevent late setState
     return () => {
       cancelled = true;
       window.removeEventListener(PROFILE_UPDATED_EVENT, handler);
@@ -199,10 +240,12 @@ export default function DealsPage() {
     };
   }, []);
 
+  // Quick helper: is this deal already selected?
   function isAdded(id: string) {
     return planIds.includes(id);
   }
 
+  // Add/remove a deal from planIds and persist to localStorage.
   function toggleDeal(id: string) {
     setPlanIds((prev) => {
       const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
@@ -211,6 +254,10 @@ export default function DealsPage() {
     });
   }
 
+  // Filter deals based on:
+  // - selected category
+  // - search query match (name/freebie/conditions)
+  // - hideAdded toggle
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
 
@@ -229,15 +276,19 @@ export default function DealsPage() {
     });
   }, [deals, query, cat, hideAdded, planIds]);
 
+  // Decide which image to show for a deal card.
+  // If the deal has no explicit image, fall back to /public/deals/{id}.png.
   function cardImageSrc(d: Deal): string {
     if (d.image) return d.image;
     return `/deals/${d.id}.png`;
   }
 
+  // Display text for the header info line
   const birthdayText = profile?.birthday ? profile.birthday : "—";
   const zipText = (profile?.zip || DEFAULT_ZIP).trim() || DEFAULT_ZIP;
 
   // ---------- styles ----------
+  // Tailwind class strings pulled up here so the JSX stays readable.
   const pillBase =
     "rounded-full border px-3 py-1 text-xs shadow-[0_10px_30px_rgba(0,0,0,0.45)] transition";
   const pill = `${pillBase} border-white/10 bg-white/5 text-zinc-200 hover:bg-white/8`;
@@ -245,6 +296,7 @@ export default function DealsPage() {
     `${pillBase} border-emerald-200/28 bg-emerald-400/14 text-emerald-100 ` +
     "shadow-[0_0_0_1px_rgba(16,185,129,0.16),0_0_44px_rgba(16,185,129,0.22)]";
 
+  // Badge style for category label on top of images
   const badgeOnImage =
     "rounded-full border px-3 py-1 text-xs font-semibold leading-none " +
     "bg-black/70 border-white/20 text-white backdrop-blur-md " +
@@ -252,6 +304,7 @@ export default function DealsPage() {
     "drop-shadow-[0_1px_1px_rgba(0,0,0,0.85)] " +
     "mix-blend-normal";
 
+  // Badge style for "Add" state
   const badgeAddOnImage =
     "rounded-full border px-3 py-1 text-xs font-semibold leading-none " +
     "bg-black/65 border-emerald-200/30 text-emerald-50 backdrop-blur-md " +
@@ -259,6 +312,7 @@ export default function DealsPage() {
     "drop-shadow-[0_1px_1px_rgba(0,0,0,0.85)] " +
     "mix-blend-normal";
 
+  // Badge style for "Added" state
   const badgeAddedOnImage =
     "rounded-full border px-3 py-1 text-xs font-semibold leading-none " +
     "bg-emerald-500/18 border-emerald-200/38 text-emerald-50 backdrop-blur-md " +
@@ -266,6 +320,7 @@ export default function DealsPage() {
     "drop-shadow-[0_1px_1px_rgba(0,0,0,0.85)] " +
     "mix-blend-normal";
 
+  // Panel style used for the search/filter box
   const panel =
     "relative rounded-[28px] border border-white/10 " +
     "bg-[linear-gradient(180deg,rgba(255,255,255,0.085)_0%,rgba(255,255,255,0.03)_42%,rgba(0,0,0,0.28)_100%)] " +
@@ -273,10 +328,12 @@ export default function DealsPage() {
     "before:pointer-events-none before:absolute before:inset-0 before:rounded-[28px] " +
     "before:shadow-[inset_0_1px_0_rgba(255,255,255,0.10),inset_0_-1px_0_rgba(0,0,0,0.40)]";
 
+  // Input container style
   const inner =
     "rounded-2xl border border-white/10 bg-black/35 backdrop-blur-xl " +
     "shadow-[inset_0_1px_0_rgba(255,255,255,0.09),0_18px_70px_rgba(0,0,0,0.58)]";
 
+  // Sticky bottom CTA button style
   const ctaGreen =
     "inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-200/22 " +
     "bg-[linear-gradient(180deg,rgba(16,185,129,0.22)_0%,rgba(16,185,129,0.12)_55%,rgba(16,185,129,0.08)_100%)] " +
@@ -288,6 +345,7 @@ export default function DealsPage() {
   return (
     <main className="relative min-h-screen overflow-x-hidden text-white">
       {/* BACKGROUND */}
+      {/* Stars background image behind everything (fixed so it doesn't scroll) */}
       <div className="pointer-events-none fixed inset-0 z-0">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -304,12 +362,14 @@ export default function DealsPage() {
       </div>
 
       {/* OVERLAYS (BRIGHTER) */}
+      {/* Darken and add texture over the background so text stays readable */}
       <div className="pointer-events-none fixed inset-0 z-10">
         <div className="absolute inset-0 bg-black/20" />
         <div className="absolute inset-0 bg-[radial-gradient(1100px_760px_at_50%_18%,rgba(0,0,0,0.00)_0%,rgba(0,0,0,0.18)_55%,rgba(0,0,0,0.45)_100%)]" />
         <div
           className="absolute inset-0 opacity-[0.035] mix-blend-overlay"
           style={{
+            // Tiny inline SVG noise texture (subtle "grain" effect)
             backgroundImage:
               "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='.35'/%3E%3C/svg%3E\")",
           }}
@@ -323,11 +383,12 @@ export default function DealsPage() {
 
         {/* Search + filters */}
         <div className={cn(panel, "p-6")}>
-          {/* top shine */}
+          {/* top shine accents */}
           <div className="pointer-events-none absolute left-1/2 top-[-1px] h-px w-[92%] -translate-x-1/2 rounded-full bg-emerald-300/25" />
           <div className="pointer-events-none absolute left-1/2 top-[-1px] h-[22px] w-[92%] -translate-x-1/2 rounded-full bg-emerald-400/10 blur-2xl" />
 
           <div className="flex flex-col gap-4">
+            {/* Search input row */}
             <div className={cn(inner, "flex items-center gap-3 px-4 py-3")}>
               <div className="text-zinc-300">🔎</div>
               <input
@@ -338,12 +399,14 @@ export default function DealsPage() {
               />
             </div>
 
+            {/* Category pills + hide added checkbox */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap gap-2">
                 {CATEGORIES.map((c) => (
                   <button
                     key={c}
                     onClick={() => setCat(c)}
+                    // Highlight the selected category
                     className={cn(c === cat ? pillActive : pill)}
                   >
                     {c}
@@ -351,6 +414,7 @@ export default function DealsPage() {
                 ))}
               </div>
 
+              {/* Hide deals already added to the plan */}
               <label className="flex items-center gap-2 text-sm text-zinc-200 select-none">
                 <input
                   type="checkbox"
@@ -362,6 +426,7 @@ export default function DealsPage() {
               </label>
             </div>
 
+            {/* Summary line: counts + profile info */}
             <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-zinc-400">
               <div>
                 Showing <span className="text-zinc-200">{filtered.length}</span> of{" "}
@@ -378,6 +443,7 @@ export default function DealsPage() {
         {/* Cards grid */}
         <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((d) => {
+            // Compute per-card values once
             const added = isAdded(d.id);
             const catLabel = normalizeCategory(d);
 
@@ -387,23 +453,29 @@ export default function DealsPage() {
                 className={cn(
                   "group relative overflow-hidden rounded-3xl border bg-black/72",
                   "border-white/10 shadow-[0_25px_100px_rgba(0,0,0,0.7)]",
+                  // Add subtle green border when selected
                   added && "border-emerald-200/18"
                 )}
               >
+                {/* Image area */}
                 <div className="relative h-48">
+                  {/* Gradient fallback behind the image */}
                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(16,185,129,0.10)_0%,rgba(0,0,0,0.55)_55%,rgba(0,0,0,0.85)_100%)]" />
 
+                  {/* Deal image */}
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={cardImageSrc(d)}
                     alt={d.name}
                     className="absolute inset-0 h-full w-full object-cover"
                     loading="lazy"
+                    // If the image doesn't exist, hide it so the gradient shows instead
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).style.display = "none";
                     }}
                   />
 
+                  {/* Dark overlay to keep badges readable */}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/0" />
 
                   {/* BADGES */}
@@ -415,17 +487,21 @@ export default function DealsPage() {
                   </div>
                 </div>
 
+                {/* Text + actions */}
                 <div className="p-5">
                   <div className="text-xl font-semibold leading-tight">{d.name}</div>
                   <div className="mt-1 text-sm text-zinc-300">{d.freebie || "Birthday reward"}</div>
 
+                  {/* Conditions preview */}
                   {d.conditions ? (
                     <div className="mt-4 text-xs text-zinc-400">{d.conditions}</div>
                   ) : (
+                    // Spacer so cards stay visually consistent
                     <div className="mt-4 text-xs text-zinc-500"> </div>
                   )}
 
                   <div className="mt-5">
+                    {/* Add/remove from plan */}
                     <button
                       onClick={() => toggleDeal(d.id)}
                       className={cn(
@@ -438,6 +514,7 @@ export default function DealsPage() {
                       {added ? "Remove ✓" : "Add to plan"}
                     </button>
 
+                    {/* Link to detail page */}
                     <div className="mt-3 text-center">
                       <Link
                         href={`/app/deals/${d.id}`}
@@ -449,6 +526,7 @@ export default function DealsPage() {
                   </div>
                 </div>
 
+                {/* Selected glow overlay */}
                 {added && (
                   <>
                     <div className="pointer-events-none absolute inset-0 bg-emerald-400/5" />
@@ -462,10 +540,12 @@ export default function DealsPage() {
       </div>
 
       {/* Sticky bottom bar */}
+      {/* Only show this CTA when there are items in the plan */}
       {planIds.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-50">
           <div className="mx-auto max-w-6xl px-4 pb-4">
             <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/75 shadow-[0_30px_140px_rgba(0,0,0,0.85)]">
+              {/* Top/bottom glow lines */}
               <div className="pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-emerald-400/14" />
               <div className="pointer-events-none absolute inset-x-0 top-0 h-[18px] bg-emerald-400/10 blur-xl" />
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-emerald-400/14" />
@@ -482,6 +562,7 @@ export default function DealsPage() {
                   </div>
                 </div>
 
+                {/* CTA to go to /app/plan */}
                 <Link href="/app/plan" className={ctaGreen}>
                   View Plan <span className="opacity-80">→</span>
                 </Link>
