@@ -1,4 +1,6 @@
 // app/login/LoginClient.tsx
+// Client-side login + signup flow using Supabase auth
+
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
@@ -6,30 +8,40 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/app/lib/supabaseClient";
 
-const ZIP_KEY = "bs_zip";
-const START_KEY = "bs_start";
-const LOC_PROMPT_OFF_KEY = "bs_loc_prompt_off";
+// localStorage keys used during login + onboarding
+const ZIP_KEY = "bs_zip";                 // ZIP fallback for routing
+const START_KEY = "bs_start";             // GPS start coords (if allowed)
+const LOC_PROMPT_OFF_KEY = "bs_loc_prompt_off"; // User opted out of location prompt
 
+// Shape of a row in the `profiles` table
 type ProfileRow = {
   user_id: string;
   display_name: string | null;
-  birthday: string | null; // ISO date string from DB
+  birthday: string | null; // ISO date string
   zip: string | null;
   avatar: string | null;
 };
 
+// Cleans and clamps a name for storage/display
+// Prevents excessive length and messy whitespace
 function clampName(s: string) {
   return s.replace(/\s+/g, " ").trim().slice(0, 24);
 }
 
+// Sanitizes name input as the user types
+// Keeps UX smooth without being overly strict
 function sanitizeNameInput(s: string) {
   return s.replace(/\s+/g, " ").slice(0, 24);
 }
 
+// Normalize ZIP input to digits only (max 5)
+// Keeps ZIP data consistent across the app
 function normalizeZip(input: string) {
   return input.replace(/\D/g, "").slice(0, 5);
 }
 
+// Ensures the `next` redirect path is safe
+// Prevents open redirects or bad paths
 function safeNext(raw: string | null): string {
   const fallback = "/app/deals";
   if (!raw) return fallback;
@@ -38,6 +50,8 @@ function safeNext(raw: string | null): string {
   return raw;
 }
 
+// Sync ZIP to localStorage if valid
+// Used after login to keep routing consistent
 function setLocalZip(zip: string | null) {
   try {
     if (zip && normalizeZip(zip).length === 5) {
@@ -48,6 +62,8 @@ function setLocalZip(zip: string | null) {
   } catch {}
 }
 
+// Fetch the user's ZIP from the profiles table
+// Used during login to avoid overwriting DB data
 async function getProfileZip(userId: string): Promise<string | null> {
   const { data, error } = await supabase
     .from("profiles")
@@ -61,6 +77,8 @@ async function getProfileZip(userId: string): Promise<string | null> {
   return z.length === 5 ? z : null;
 }
 
+// Insert or update a profile row for a user
+// Used on signup and as a safety net on login
 async function upsertProfileForUser(userId: string, patch: Partial<ProfileRow>) {
   const payload: any = {
     user_id: userId,
@@ -68,7 +86,10 @@ async function upsertProfileForUser(userId: string, patch: Partial<ProfileRow>) 
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "user_id" });
+  const { error } = await supabase
+    .from("profiles")
+    .upsert(payload, { onConflict: "user_id" });
+
   if (error) throw error;
 }
 
@@ -76,31 +97,36 @@ export default function LoginClient() {
   const router = useRouter();
   const search = useSearchParams();
 
+  // Resolve safe redirect destination after auth
   const nextPath = useMemo(() => safeNext(search.get("next")), [search]);
 
+  // Auth form state
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
-
   const [name, setName] = useState("");
   const [mode, setMode] = useState<"login" | "signup">("login");
 
+  // UI state
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  // Location modal state
+  // Location permission modal state
   const [showLocModal, setShowLocModal] = useState(false);
   const [locBusy, setLocBusy] = useState(false);
   const [dontAskAgain, setDontAskAgain] = useState(false);
 
+  // Reset "don't ask again" checkbox when modal opens
   useEffect(() => {
     if (showLocModal) setDontAskAgain(false);
   }, [showLocModal]);
 
+  // Navigate to the resolved next page
   function goNext() {
     router.replace(nextPath);
     router.refresh();
   }
 
+  // Check whether we should prompt for location access
   function shouldPromptForLocation(): boolean {
     try {
       return localStorage.getItem(LOC_PROMPT_OFF_KEY) !== "true";
@@ -109,6 +135,8 @@ export default function LoginClient() {
     }
   }
 
+  // Called after successful login/signup
+  // Decides whether to show the location prompt
   function afterAuthSuccess() {
     if (shouldPromptForLocation()) {
       setShowLocModal(true);
@@ -117,12 +145,14 @@ export default function LoginClient() {
     goNext();
   }
 
+  // Main submit handler for login/signup
   async function onContinue(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
 
     setErr("");
 
+    // Basic validation
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail) return setErr("Enter an email.");
     if (!pw || pw.length < 6) return setErr("Enter a password (min 6 chars).");
@@ -133,7 +163,7 @@ export default function LoginClient() {
     setBusy(true);
     try {
       if (mode === "signup") {
-        // Use current origin so confirm links always redirect to the right domain
+        // Use current origin so email confirmation links work on all environments
         const origin = typeof window !== "undefined" ? window.location.origin : "";
 
         const { data, error } = await supabase.auth.signUp({
@@ -146,7 +176,7 @@ export default function LoginClient() {
         });
         if (error) throw error;
 
-        // If email confirmation is enabled, no session yet.
+        // Email confirmation enabled → no session yet
         if (!data.session) {
           setErr(
             "Check your email to confirm your account. If you don’t see it, check Spam or Promotions, then come back and log in."
@@ -154,11 +184,13 @@ export default function LoginClient() {
           return;
         }
 
-        // Session exists: write profile row
+        // Session exists → create profile row
         const userId = data.session.user.id;
 
-        // For NEW accounts, we can initialize zip from local storage as a convenience
-        const zipFallback = normalizeZip((localStorage.getItem(ZIP_KEY) || "").toString());
+        // Use local ZIP as a convenience for new users
+        const zipFallback = normalizeZip(
+          (localStorage.getItem(ZIP_KEY) || "").toString()
+        );
 
         await upsertProfileForUser(userId, {
           display_name: cleanName,
@@ -170,7 +202,7 @@ export default function LoginClient() {
         return;
       }
 
-      // LOGIN
+      // ----- LOGIN FLOW -----
       const { data, error } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password: pw,
@@ -180,20 +212,19 @@ export default function LoginClient() {
       const userId = data.user?.id;
       if (!userId) throw new Error("Login succeeded but user id missing.");
 
-      // ✅ IMPORTANT:
-      // DO NOT overwrite this user's DB zip from shared localStorage.
-      // Instead: read the user's zip from DB and sync localStorage to it.
+      // IMPORTANT:
+      // Do NOT overwrite DB ZIP with shared localStorage.
+      // Instead, sync localStorage FROM the database.
       let dbZip: string | null = null;
       try {
         dbZip = await getProfileZip(userId);
       } catch {
-        // ignore read failure, user can still proceed
+        // ZIP read failure should not block login
       }
 
       setLocalZip(dbZip);
 
-      // Optional: if profile row doesn't exist at all, create one without zip pollution
-      // (keeps DB zip null unless user sets it in Profile page)
+      // Ensure profile row exists (without polluting zip)
       try {
         await upsertProfileForUser(userId, {});
       } catch {}
@@ -206,6 +237,7 @@ export default function LoginClient() {
     }
   }
 
+  // Close location modal without granting access
   function closeLocModalContinue() {
     if (dontAskAgain) {
       try {
@@ -216,6 +248,7 @@ export default function LoginClient() {
     goNext();
   }
 
+  // Request GPS location and store starting coords
   async function allowLocation() {
     setLocBusy(true);
     setErr("");
@@ -246,7 +279,8 @@ export default function LoginClient() {
     );
   }
 
-  // ---------- styles (unchanged) ----------
+  // ---------- styles (purely visual, unchanged) ----------
+
   const panel =
     "relative rounded-[28px] border border-white/10 " +
     "bg-[linear-gradient(180deg,rgba(255,255,255,0.085)_0%,rgba(255,255,255,0.03)_42%,rgba(0,0,0,0.28)_100%)] " +
