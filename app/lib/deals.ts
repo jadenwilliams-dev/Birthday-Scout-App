@@ -1,35 +1,41 @@
+// Categories used to group deals in the UI and filters
+// Keeping this as a union type prevents typos and invalid categories
 export type Category = "Food" | "Drinks" | "Dessert" | "Other";
 
+// Core Deal type used throughout the app
+// This is the single source of truth for what a "deal" looks like
 export type Deal = {
-  id: string;
-  name: string;
-  category: Category;
-  freebie: string;
-  conditions?: string;
-  image?: string;
+  id: string;            // Stable internal identifier (used for routing, plans, storage)
+  name: string;          // Brand name shown to the user
+  category: Category;    // Used for filtering and UI grouping
+  freebie: string;       // Short description of the birthday reward
+  conditions?: string;  // Optional fine print (rewards required, etc.)
+  image?: string;        // Optional image shown on deal cards
 
-  // Optional “better maps” + detail page extras
-  mapQuery?: string;      // e.g. "Starbucks" or "Starbucks coffee"
-  signupUrl?: string;     // e.g. rewards signup link
-  claimSteps?: string[];  // bullet steps for detail page
+  // Optional fields used for maps, routing, and detail pages
+  mapQuery?: string;     // Search string for maps (more reliable than just the name)
+  signupUrl?: string;    // Rewards / signup link for the brand
+  claimSteps?: string[]; // Simple step-by-step instructions shown on the detail page
 };
 
+// Master list of all birthday deals supported by the app
+// This file is intentionally static so it can be reused everywhere
 export const ALL_DEALS: Deal[] = [
   {
-  id: "starbucks",
-  name: "Starbucks",
-  category: "Drinks",
-  freebie: "Free birthday drink",
-  conditions: "Requires Starbucks Rewards",
-  mapQuery: "Starbucks",
-  signupUrl: "https://www.starbucks.com/rewards",
-  claimSteps: [
-    "Join Starbucks Rewards",
-    "Add your birthday",
-    "Redeem in app or in-store",
-  ],
-  image: "/deals/starbucks.png",
-},
+    id: "starbucks",
+    name: "Starbucks",
+    category: "Drinks",
+    freebie: "Free birthday drink",
+    conditions: "Requires Starbucks Rewards",
+    mapQuery: "Starbucks",
+    signupUrl: "https://www.starbucks.com/rewards",
+    claimSteps: [
+      "Join Starbucks Rewards",
+      "Add your birthday",
+      "Redeem in app or in-store",
+    ],
+    image: "/deals/starbucks.png",
+  },
 
   {
     id: "chipotle",
@@ -46,6 +52,7 @@ export const ALL_DEALS: Deal[] = [
     ],
     image: "/deals/chipotle.png",
   },
+
   {
     id: "nothingbundt",
     name: "Nothing Bundt Cakes",
@@ -61,6 +68,7 @@ export const ALL_DEALS: Deal[] = [
     ],
     image: "/deals/nothingbunt.png",
   },
+
   {
     id: "krispykreme",
     name: "Krispy Kreme",
@@ -69,9 +77,14 @@ export const ALL_DEALS: Deal[] = [
     conditions: "Requires Krispy Kreme Rewards",
     mapQuery: "Krispy Kreme",
     signupUrl: "https://www.krispykreme.com/rewards",
-    claimSteps: ["Join rewards", "Add birthday", "Redeem in store or app"],
+    claimSteps: [
+      "Join rewards",
+      "Add birthday",
+      "Redeem in store or app",
+    ],
     image: "/deals/krispy.png",
   },
+
   {
     id: "panera",
     name: "Panera Bread",
@@ -80,9 +93,14 @@ export const ALL_DEALS: Deal[] = [
     conditions: "MyPanera member required",
     mapQuery: "Panera Bread",
     signupUrl: "https://www.panerabread.com/en-us/mypanera.html",
-    claimSteps: ["Create MyPanera account", "Add birthday", "Check rewards on your birthday"],
+    claimSteps: [
+      "Create MyPanera account",
+      "Add birthday",
+      "Check rewards on your birthday",
+    ],
     image: "/deals/panera.png",
   },
+
   {
     id: "sephora",
     name: "Sephora",
@@ -91,9 +109,13 @@ export const ALL_DEALS: Deal[] = [
     conditions: "Beauty Insider member required",
     mapQuery: "Sephora",
     signupUrl: "https://www.sephora.com/beauty/beauty-insider",
-    claimSteps: ["Join Beauty Insider", "Redeem in store or online during birthday month"],
+    claimSteps: [
+      "Join Beauty Insider",
+      "Redeem in store or online during birthday month",
+    ],
     image: "/deals/sephora.png",
   },
+
   {
     id: "ulta",
     name: "Ulta Beauty",
@@ -102,8 +124,13 @@ export const ALL_DEALS: Deal[] = [
     conditions: "Ultamate Rewards member required",
     mapQuery: "Ulta Beauty",
     signupUrl: "https://www.ulta.com/rewards/all",
-    claimSteps: ["Join Ultamate Rewards", "Add birthday", "Redeem gift in store during birthday month"],
+    claimSteps: [
+      "Join Ultamate Rewards",
+      "Add birthday",
+      "Redeem gift in store during birthday month",
+    ],
   },
+
   {
     id: "ihop",
     name: "IHOP",
@@ -112,9 +139,14 @@ export const ALL_DEALS: Deal[] = [
     conditions: "IHOP Rewards required",
     mapQuery: "IHOP",
     signupUrl: "https://www.ihop.com/en/rewards",
-    claimSteps: ["Join rewards", "Add birthday", "Redeem offer in app"],
+    claimSteps: [
+      "Join rewards",
+      "Add birthday",
+      "Redeem offer in app",
+    ],
     image: "/deals/ihop.png",
   },
+
   {
     id: "jerseymikes",
     name: "Jersey Mike’s",
@@ -123,9 +155,14 @@ export const ALL_DEALS: Deal[] = [
     conditions: "Shore Points member required",
     mapQuery: "Jersey Mike's",
     signupUrl: "https://www.jerseymikes.com/rewards",
-    claimSteps: ["Join Shore Points", "Add birthday", "Redeem reward when it appears"],
+    claimSteps: [
+      "Join Shore Points",
+      "Add birthday",
+      "Redeem reward when it appears",
+    ],
     image: "/deals/jerseymikes.png",
   },
+
   {
     id: "bathbodyworks",
     name: "Bath & Body Works",
@@ -134,9 +171,14 @@ export const ALL_DEALS: Deal[] = [
     conditions: "Rewards member required (where available)",
     mapQuery: "Bath & Body Works",
     signupUrl: "https://www.bathandbodyworks.com/my-account/rewards",
-    claimSteps: ["Join rewards", "Add birthday", "Check app for birthday offer"],
+    claimSteps: [
+      "Join rewards",
+      "Add birthday",
+      "Check app for birthday offer",
+    ],
     image: "/deals/bnb.png",
   },
+
   {
     id: "coldstone",
     name: "Cold Stone Creamery",
@@ -145,9 +187,14 @@ export const ALL_DEALS: Deal[] = [
     conditions: "My Cold Stone Club required",
     mapQuery: "Cold Stone Creamery",
     signupUrl: "https://www.coldstonecreamery.com/about/clubs/",
-    claimSteps: ["Join the club", "Confirm email", "Get coupon near your birthday"],
+    claimSteps: [
+      "Join the club",
+      "Confirm email",
+      "Get coupon near your birthday",
+    ],
     image: "/deals/coldstone.png",
   },
+
   {
     id: "jeremias",
     name: "Jeremiah’s Italian Ice",
@@ -156,9 +203,14 @@ export const ALL_DEALS: Deal[] = [
     conditions: "Rewards member required",
     mapQuery: "Jeremiah's Italian Ice",
     signupUrl: "https://jeremiahsice.com/rewards/",
-    claimSteps: ["Join rewards", "Add birthday", "Redeem offer in store"],
+    claimSteps: [
+      "Join rewards",
+      "Add birthday",
+      "Redeem offer in store",
+    ],
     image: "/deals/jeremiahs.png",
   },
+
   {
     id: "cinnabon",
     name: "Cinnabon",
@@ -167,9 +219,14 @@ export const ALL_DEALS: Deal[] = [
     conditions: "Cinnabon Rewards required",
     mapQuery: "Cinnabon",
     signupUrl: "https://www.cinnabon.com/rewards",
-    claimSteps: ["Join rewards", "Add birthday", "Redeem in app"],
+    claimSteps: [
+      "Join rewards",
+      "Add birthday",
+      "Redeem in app",
+    ],
     image: "/deals/cinnabon.png",
   },
+
   {
     id: "raisingcanes",
     name: "Raising Cane’s",
@@ -178,9 +235,14 @@ export const ALL_DEALS: Deal[] = [
     conditions: "Cane’s rewards member required",
     mapQuery: "Raising Cane's",
     signupUrl: "https://www.raisingcanes.com/canes-rewards/",
-    claimSteps: ["Join rewards", "Add birthday", "Redeem reward when available"],
-  image: "/deals/canes.png",
+    claimSteps: [
+      "Join rewards",
+      "Add birthday",
+      "Redeem reward when available",
+    ],
+    image: "/deals/canes.png",
   },
+
   {
     id: "buffalowildwings",
     name: "Buffalo Wild Wings",
@@ -189,7 +251,11 @@ export const ALL_DEALS: Deal[] = [
     conditions: "Rewards member required",
     mapQuery: "Buffalo Wild Wings",
     signupUrl: "https://www.buffalowildwings.com/rewards/",
-    claimSteps: ["Join rewards", "Add birthday", "Check app for birthday reward"],
-  image: "/deals/bww.png",
+    claimSteps: [
+      "Join rewards",
+      "Add birthday",
+      "Check app for birthday reward",
+    ],
+    image: "/deals/bww.png",
   },
 ];
