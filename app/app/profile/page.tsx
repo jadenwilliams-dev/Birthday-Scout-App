@@ -1,32 +1,48 @@
 // app/app/profile/page.tsx
-"use client";
+"use client"; // Client component because we use localStorage, window events, and Supabase auth
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/app/lib/supabaseClient";
 
+/**
+ * localStorage keys:
+ * ZIP + start mode are read by other pages (Plan/Deals) for routing + searching.
+ */
 const ZIP_KEY = "bs_zip";
 const START_MODE_KEY = "bs_start_mode"; // "geo" | "zip"
 const DEFAULT_ZIP = "11111";
 
-// ✅ shared profile cache + event for Deals/Plan/etc
+/**
+ * Shared profile cache + event:
+ * Deals/Plan/etc can read PROFILE_KEY immediately and refresh when PROFILE_UPDATED_EVENT fires.
+ */
 const PROFILE_KEY = "bs_profile";
 const PROFILE_UPDATED_EVENT = "bs_profile_updated";
 
+/** ZIP input cleanup (5 digits max) */
 function normalizeZip(input: string) {
   return input.replace(/\D/g, "").slice(0, 5);
 }
 
-// ✅ normalize zip from DB where it might be number
+/**
+ * DB zip can come back as a number (depending on schema / older data),
+ * so normalize it safely into a 5-digit string.
+ */
 function normalizeZipAny(v: unknown) {
   if (typeof v === "string") return normalizeZip(v);
   if (typeof v === "number" && Number.isFinite(v)) return normalizeZip(String(Math.trunc(v)));
   return "";
 }
 
+/** Display names get cleaned up + capped so the UI stays neat */
 function clampName(s: string) {
   return s.replace(/\s+/g, " ").trim().slice(0, 24);
 }
 
+/**
+ * Checks if a YYYY-MM-DD birthday matches today's month/day.
+ * Year doesn't matter — we're just doing "is it your birthday today?"
+ */
 function isTodayISO(isoDate: string) {
   if (!isoDate) return false;
   const [, m, d] = isoDate.split("-").map(Number);
@@ -35,7 +51,7 @@ function isTodayISO(isoDate: string) {
   return now.getMonth() + 1 === m && now.getDate() === d;
 }
 
-// ---------- copied look pieces from Plan page ----------
+// ---------- UI pieces copied from Plan page to keep the style consistent ----------
 function IconDot({ on }: { on: boolean }) {
   return (
     <span
@@ -48,6 +64,7 @@ function IconDot({ on }: { on: boolean }) {
 
 /**
  * HERO LOGO (lockup) — same as Plan page.
+ * This tries multiple filenames so you can swap assets without touching code.
  */
 function BrandLockup() {
   const candidates = [
@@ -70,15 +87,23 @@ function BrandLockup() {
         alt="BirthdayScout"
         className="block h-[300px] sm:h-[360px] w-auto select-none drop-shadow-[0_28px_70px_rgba(0,0,0,0.70)]"
         draggable={false}
-        onError={() => setIdx((v) => v + 1)}
+        onError={() => setIdx((v) => v + 1)} // If one file is missing, try the next
       />
     </div>
   );
 }
 
+/**
+ * Which edit panel is currently open.
+ * "all" is the full edit modal, others are focused single-field edits.
+ */
 type EditPanel = "none" | "all" | "name" | "birthday" | "zip" | "start";
 
-// ✅ helper to keep Deals/Plan/etc in sync
+/**
+ * Keeps other pages in sync:
+ * - writes a simple profile snapshot to localStorage
+ * - fires a custom event so Deals/Plan can refresh immediately
+ */
 function writeSharedProfileCache(next: { displayName: string; birthday: string; zip: string }) {
   try {
     localStorage.setItem(
@@ -99,24 +124,32 @@ function writeSharedProfileCache(next: { displayName: string; birthday: string; 
 export default function ProfilePage() {
   const [email, setEmail] = useState<string>("");
 
-  // saved values (what the cards show)
+  // Saved values (what we show on the main profile card)
   const [displayName, setDisplayName] = useState("");
   const [birthday, setBirthday] = useState("");
   const [zip, setZip] = useState(DEFAULT_ZIP);
   const [startMode, setStartMode] = useState<"geo" | "zip">("geo");
 
-  // draft values (what inputs edit)
+  // Draft values (what the modal edits before saving)
   const [draftName, setDraftName] = useState("");
   const [draftBirthday, setDraftBirthday] = useState("");
   const [draftZip, setDraftZip] = useState(DEFAULT_ZIP);
   const [draftStartMode, setDraftStartMode] = useState<"geo" | "zip">("geo");
 
+  // Small UI state
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState("");
 
   const [panel, setPanel] = useState<EditPanel>("none");
 
-  // ✅ Load user + DB profile
+  /**
+   * Initial load:
+   * - confirm user is logged in
+   * - pull profile from Supabase
+   * - decide the best ZIP source (DB > localStorage > default)
+   * - hydrate UI + draft fields
+   * - write shared cache so Deals/Plan have fresh profile info immediately
+   */
   useEffect(() => {
     (async () => {
       try {
@@ -137,34 +170,39 @@ export default function ProfilePage() {
 
         if (error) throw error;
 
+        // localStorage may contain an older ZIP, but it's still a useful fallback
         const storedZip = normalizeZip(localStorage.getItem(ZIP_KEY) || "");
+
+        // DB ZIP is per-account (best source when it exists)
         const dbZip = normalizeZipAny(p?.zip);
 
         // Prefer DB zip (per-account). Only fallback to localStorage if DB is empty.
         const z = dbZip.length === 5 ? dbZip : storedZip.length === 5 ? storedZip : DEFAULT_ZIP;
 
-        // If DB zip exists, keep localStorage in sync so other pages reading ZIP_KEY are correct for this user
+        // If DB zip exists, keep localStorage in sync so other pages using ZIP_KEY are correct
         try {
           if (dbZip.length === 5) localStorage.setItem(ZIP_KEY, dbZip);
         } catch {}
 
+        // Route start preference is stored locally (geo vs zip)
         const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
 
         const dn = (p?.display_name as string) || "";
         const bd = (p?.birthday as string) || "";
 
+        // Saved state (what the profile card shows)
         setDisplayName(dn);
         setBirthday(bd);
         setZip(z);
         setStartMode(mode);
 
-        // init drafts
+        // Draft state (what the modal edits)
         setDraftName(dn);
         setDraftBirthday(bd);
         setDraftZip(z);
         setDraftStartMode(mode);
 
-        // ✅ IMPORTANT: write shared cache so Deals page has correct data immediately
+        // IMPORTANT: write shared cache so other pages refresh without waiting
         writeSharedProfileCache({ displayName: dn, birthday: bd, zip: z });
       } catch (e: any) {
         setErr(e?.message || "Failed to load profile.");
@@ -172,8 +210,10 @@ export default function ProfilePage() {
     })();
   }, []);
 
+  // Convenience UI flags
   const birthdayIsToday = useMemo(() => isTodayISO(birthday), [birthday]);
 
+  // Profile is "complete" once we have a real name, birthday, and valid ZIP
   const profileComplete = !!clampName(displayName) && !!birthday && normalizeZip(zip).length === 5;
 
   // ======= aesthetics (match Plan page) =======
@@ -205,6 +245,10 @@ export default function ProfilePage() {
     "shadow-[0_0_0_1px_rgba(16,185,129,0.14),0_18px_54px_rgba(0,0,0,0.40),0_0_22px_rgba(16,185,129,0.18)] " +
     "transition";
 
+  /**
+   * Opens a panel and resets drafts to the current saved values.
+   * (So you always start editing from what’s actually saved.)
+   */
   function openPanel(next: EditPanel) {
     setErr("");
     setDraftName(displayName);
@@ -214,6 +258,7 @@ export default function ProfilePage() {
     setPanel(next);
   }
 
+  /** Cancels editing and resets drafts back to saved values */
   function cancelPanel() {
     setErr("");
     setDraftName(displayName);
@@ -223,6 +268,10 @@ export default function ProfilePage() {
     setPanel("none");
   }
 
+  /**
+   * Validation helper — only validates fields relevant to the panel.
+   * This is why you can edit "start mode" without being forced to fill everything.
+   */
   function validateDrafts(opts: { name?: boolean; birthday?: boolean; zip?: boolean }) {
     const needName = opts.name ?? false;
     const needBirthday = opts.birthday ?? false;
@@ -238,6 +287,10 @@ export default function ProfilePage() {
     return "";
   }
 
+  /**
+   * Upserts into Supabase profiles table.
+   * We store birthday/zip as null when empty to avoid keeping stale data.
+   */
   async function saveToDB(next: { display_name: string; birthday: string; zip: string }) {
     const { data } = await supabase.auth.getUser();
     const user = data.user;
@@ -257,6 +310,14 @@ export default function ProfilePage() {
     if (error) throw error;
   }
 
+  /**
+   * Applies the save for the active panel.
+   * This updates:
+   * - localStorage (start mode + ZIP)
+   * - Supabase DB profile (display name, birthday, ZIP)
+   * - shared profile cache + event (so other pages refresh)
+   * - local UI state
+   */
   async function applySave(which: EditPanel) {
     setErr("");
 
@@ -265,6 +326,7 @@ export default function ProfilePage() {
     const z = normalizeZip(draftZip) || DEFAULT_ZIP;
     const mode = draftStartMode;
 
+    // Validation depends on which panel is open
     const v =
       which === "all"
         ? validateDrafts({ name: true, birthday: true, zip: true })
@@ -283,6 +345,7 @@ export default function ProfilePage() {
       return;
     }
 
+    // Only update the field that was edited (unless "all")
     const nextDisplay = which === "birthday" || which === "zip" || which === "start" ? displayName : name;
     const nextBirthday = which === "name" || which === "zip" || which === "start" ? birthday : bday;
     const nextZip = which === "name" || which === "birthday" || which === "start" ? zip : z;
@@ -292,32 +355,33 @@ export default function ProfilePage() {
     const finalZip = which === "all" ? z : nextZip;
 
     try {
-      // Persist start mode locally (preference)
+      // Persist route-start preference locally
       localStorage.setItem(START_MODE_KEY, mode);
 
-      // Keep ZIP cache locally for any old readers
+      // Keep ZIP stored locally for any readers that still use ZIP_KEY
       localStorage.setItem(ZIP_KEY, finalZip);
 
-      // ✅ Save profile per-user
+      // Save profile per-user in Supabase
       await saveToDB({
         display_name: finalDisplay || "",
         birthday: finalBirthday || "",
         zip: finalZip || DEFAULT_ZIP,
       });
 
-      // Update UI state
+      // Update UI state so the page immediately reflects saved values
       setDisplayName(finalDisplay || "");
       setBirthday(finalBirthday || "");
       setZip(finalZip || DEFAULT_ZIP);
       setStartMode(mode);
 
-      // ✅ IMPORTANT: update shared cache + broadcast update
+      // Update shared cache + broadcast update so Deals/Plan refresh instantly
       writeSharedProfileCache({
         displayName: finalDisplay || "",
         birthday: finalBirthday || "",
         zip: finalZip || DEFAULT_ZIP,
       });
 
+      // Small "Saved" toast
       setSaved(true);
       setTimeout(() => setSaved(false), 1400);
       setPanel("none");
@@ -336,7 +400,7 @@ export default function ProfilePage() {
         text-white
       "
     >
-      {/* BACKGROUND */}
+      {/* BACKGROUND: starfield */}
       <div className="pointer-events-none fixed inset-0 z-0">
         <img
           src="/bg-stars.png"
@@ -351,7 +415,7 @@ export default function ProfilePage() {
         />
       </div>
 
-      {/* OVERLAYS */}
+      {/* OVERLAYS: darken + vignette + film grain */}
       <div className="pointer-events-none fixed inset-0 z-10">
         <div className="absolute inset-0 bg-black/10" />
         <div className="absolute inset-0 bg-[radial-gradient(1100px_760px_at_50%_18%,rgba(0,0,0,0.00)_0%,rgba(0,0,0,0.12)_55%,rgba(0,0,0,0.34)_100%)]" />
@@ -374,6 +438,7 @@ export default function ProfilePage() {
 
             <div className="pl-10 lg:pl-30 -mt-24">
               <div className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-black/35 px-3 py-1 text-xs text-zinc-300">
+                {/* Dot turns on when the profile meets minimum requirements */}
                 <IconDot on={profileComplete} />
                 Settings
               </div>
@@ -397,9 +462,11 @@ export default function ProfilePage() {
             </div>
 
             <div className="p-6">
+              {/* Main profile card */}
               <div className="relative rounded-[26px] border border-white/14 bg-black/45 backdrop-blur-xl shadow-[0_18px_70px_rgba(0,0,0,0.55)] p-6">
                 <div className="flex items-center justify-between gap-6">
                   <div className="flex items-center gap-4 min-w-0">
+                    {/* Avatar = first letter of name */}
                     <div className="h-14 w-14 rounded-full bg-emerald-400/20 border border-emerald-200/30 flex items-center justify-center text-xl font-semibold text-emerald-100 shadow-[0_0_30px_rgba(16,185,129,0.35)]">
                       {displayName?.[0]?.toUpperCase() || "?"}
                     </div>
@@ -422,6 +489,7 @@ export default function ProfilePage() {
 
                 <div className="my-6 h-px bg-white/10" />
 
+                {/* Quick edit rows */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
@@ -468,6 +536,7 @@ export default function ProfilePage() {
                   </div>
                 </div>
 
+                {/* Completion message */}
                 <div className="mt-6 flex items-center gap-2 text-sm text-emerald-200">
                   <span className="h-4 w-4 rounded-full bg-emerald-400/25 flex items-center justify-center text-xs">
                     ✓
@@ -475,6 +544,7 @@ export default function ProfilePage() {
                   {profileComplete ? "All set! Your profile is fully completed." : "Finish setup to complete your profile."}
                 </div>
 
+                {/* Error banner */}
                 {err ? (
                   <div className="mt-5 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
                     {err}
@@ -503,6 +573,7 @@ export default function ProfilePage() {
                   <div className="text-sm text-zinc-400">Changes are stored to your account.</div>
                 </div>
 
+                {/* Modal fields */}
                 <div className="p-5 space-y-5">
                   {(panel === "all" || panel === "name") && (
                     <div>
@@ -574,6 +645,7 @@ export default function ProfilePage() {
                   )}
                 </div>
 
+                {/* Modal actions */}
                 <div className="px-5 py-4 border-t border-white/10 flex items-center justify-end gap-3">
                   <button onClick={cancelPanel} className={BtnCancel}>
                     Cancel

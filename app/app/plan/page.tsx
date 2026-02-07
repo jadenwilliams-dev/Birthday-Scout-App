@@ -1,5 +1,5 @@
 // app/app/plan/page.tsx
-"use client";
+"use client"; // Client component because we use localStorage, geolocation, clipboard, window events, etc.
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Image from "next/image";
@@ -8,6 +8,10 @@ import { ALL_DEALS } from "@/app/lib/deals";
 import OpenRouteButton from "./OpenRouteButton";
 import { supabase } from "@/app/lib/supabaseClient";
 
+/**
+ * Deal shape used on this page.
+ * NOTE: this is intentionally flexible because deals can come from different schemas over time.
+ */
 type Deal = {
   id: string;
   name: string;
@@ -16,9 +20,13 @@ type Deal = {
   freebie?: string;
   conditions?: string;
   link?: string;
-  mapQuery?: string;
+  mapQuery?: string; // Optional override for map searching (when name alone is too vague)
 };
 
+/**
+ * Response we expect back from /api/optimize-route.
+ * Some fields are optional to keep the UI resilient if the API changes slightly.
+ */
 type OptimizeResp = {
   optimized?: boolean;
   orderedIds?: string[];
@@ -29,27 +37,35 @@ type OptimizeResp = {
   resolvedStops?: { id: string; lat: number; lon: number; pickedFrom?: string }[];
 };
 
-const PLAN_KEY = "bs_plan";
-const CLAIMED_KEY = "bs_claimed";
-const ZIP_KEY = "bs_zip";
-const START_KEY = "bs_start";
-const START_MODE_KEY = "bs_start_mode"; // "geo" | "zip"
+/**
+ * localStorage keys used across the app.
+ * This page reads/writes these so the user's plan persists across refreshes.
+ */
+const PLAN_KEY = "bs_plan"; // Array of deal IDs in the user's plan
+const CLAIMED_KEY = "bs_claimed"; // Array of deal IDs marked as claimed
+const ZIP_KEY = "bs_zip"; // ZIP used for searches / fallback
+const START_KEY = "bs_start"; // Start coords (GPS), stored as JSON {lat, lon}
+const START_MODE_KEY = "bs_start_mode"; // "geo" | "zip" — controls how we build the route start
 
-const DEST_KEY = "bs_destination_id";
-const DEST_PROMPT_OFF_KEY = "bs_dest_prompt_off";
+const DEST_KEY = "bs_destination_id"; // Which stop is the chosen destination (forced to the end)
+const DEST_PROMPT_OFF_KEY = "bs_dest_prompt_off"; // Optional UX flag (kept for future / other UI)
 
-const LAST_OPT_KEY = "bs_last_optimized_at";
-const LAST_ROUTE_DIST_M = "bs_last_route_distance_m";
-const LAST_ROUTE_DUR_S = "bs_last_route_duration_s";
-const LAST_ROUTE_ORDER = "bs_last_route_order";
+const LAST_OPT_KEY = "bs_last_optimized_at"; // Timestamp of last optimization
+const LAST_ROUTE_DIST_M = "bs_last_route_distance_m"; // Cached distance from API
+const LAST_ROUTE_DUR_S = "bs_last_route_duration_s"; // Cached duration from API
+const LAST_ROUTE_ORDER = "bs_last_route_order"; // Ordered IDs from last optimization
 
-const SKIPPED_KEY = "bs_skipped";
-const AUTO_ADVANCE_OPEN_KEY = "bs_auto_advance_open_maps";
-const RESOLVED_KEY = "bs_resolved_stops";
+const SKIPPED_KEY = "bs_skipped"; // Stops the user wants to skip today
+const AUTO_ADVANCE_OPEN_KEY = "bs_auto_advance_open_maps"; // Auto-open maps after claiming
+const RESOLVED_KEY = "bs_resolved_stops"; // Exact lat/lon for each stop (picked by Places)
 
-const PLAN_UPDATED_EVENT = "bs_plan_updated";
-const PROFILE_UPDATED_EVENT = "bs_profile_updated";
+const PLAN_UPDATED_EVENT = "bs_plan_updated"; // Custom event so other pages can refresh if needed
+const PROFILE_UPDATED_EVENT = "bs_profile_updated"; // Custom event for profile fields like ZIP
 
+/**
+ * Safe helpers for reading/writing localStorage.
+ * These keep the app from crashing if storage is blocked or corrupted.
+ */
 function readStringArray(key: string): string[] {
   try {
     const raw = localStorage.getItem(key);
@@ -88,6 +104,7 @@ function writeNum(key: string, val: number) {
   localStorage.setItem(key, String(val));
 }
 
+/** Nicely formats the last optimized timestamp for the UI */
 function formatWhen(ts: number) {
   const d = new Date(ts);
   return d.toLocaleString(undefined, {
@@ -98,6 +115,7 @@ function formatWhen(ts: number) {
   });
 }
 
+/** Basic unit helpers for showing route stats */
 function metersToMiles(m: number) {
   return m / 1609.34;
 }
@@ -105,10 +123,16 @@ function secondsToMinutes(s: number) {
   return Math.max(1, Math.round(s / 60));
 }
 
+/**
+ * iOS tends to behave better with Apple Maps links,
+ * so we use this to decide which map provider to open.
+ */
 function isProbablyIOS() {
   if (typeof navigator === "undefined") return false;
   return /iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
+
+/** Open a single place search in the user's map app */
 function openPlaceInMaps(query: string) {
   const q = encodeURIComponent(query);
   const url = isProbablyIOS()
@@ -117,6 +141,11 @@ function openPlaceInMaps(query: string) {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+/**
+ * Clipboard helper:
+ * - Uses modern clipboard API when available
+ * - Falls back to a hidden textarea for older browsers
+ */
 async function copyText(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {
@@ -142,6 +171,7 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+/** Confetti is optional, so we guard everything to avoid breaking the page if it's missing */
 function tryConfetti() {
   try {
     const w = window as any;
@@ -151,11 +181,15 @@ function tryConfetti() {
   } catch {}
 }
 
+/** Normalizes any user input into a 5-digit ZIP */
 function normalizeZip(input: string) {
   return input.replace(/\D/g, "").slice(0, 5);
 }
 
-/** Pull zip from Supabase profiles (per-user) */
+/**
+ * Pull zip from Supabase profiles (per-user).
+ * If not logged in or missing, return "" and rely on localStorage fallback.
+ */
 async function fetchZipFromDB(): Promise<string> {
   const { data } = await supabase.auth.getUser();
   const user = data.user;
@@ -172,7 +206,10 @@ async function fetchZipFromDB(): Promise<string> {
   return z || "";
 }
 
-/** Write zip to Supabase profiles (per-user) */
+/**
+ * Write zip to Supabase profiles (per-user).
+ * We store null when empty so the DB doesn't keep stale ZIPs forever.
+ */
 async function saveZipToDB(nextZip: string) {
   const { data } = await supabase.auth.getUser();
   const user = data.user;
@@ -188,6 +225,7 @@ async function saveZipToDB(nextZip: string) {
   );
 }
 
+/** Small UI pill used throughout the page for statuses (claimed/skipped/etc.) */
 function Pill({
   children,
   tone = "neutral",
@@ -209,6 +247,7 @@ function Pill({
   );
 }
 
+/** Little status dot used in the header */
 function IconDot({ on }: { on: boolean }) {
   return (
     <span
@@ -219,6 +258,7 @@ function IconDot({ on }: { on: boolean }) {
   );
 }
 
+/** Decorative location glyph shown next to the Start card */
 function LocationGlyph() {
   return (
     <span className="grid place-items-center h-8 w-8 rounded-full border border-emerald-200/22 bg-black/25 shadow-[0_0_38px_rgba(16,185,129,0.12)]">
@@ -234,6 +274,10 @@ function LocationGlyph() {
   );
 }
 
+/**
+ * Brand logo mapping.
+ * This is purely a UI boost so popular stops look nice in the timeline.
+ */
 function getBrandLogoSrc(d: Deal): string | null {
   const id = (d.id || "").toLowerCase();
   const name = (d.name || "").toLowerCase();
@@ -253,6 +297,7 @@ function getBrandLogoSrc(d: Deal): string | null {
   return null;
 }
 
+/** Some brands need a specific background so the logo doesn’t look washed out */
 function brandBg(deal: Deal): string {
   const id = (deal.id || "").toLowerCase();
   const name = (deal.name || "").toLowerCase();
@@ -261,6 +306,7 @@ function brandBg(deal: Deal): string {
   return "rgba(255,255,255,0.03)";
 }
 
+/** Small per-brand zoom tweaks so logos sit nicely inside the circle */
 function brandZoom(deal: Deal): number {
   const id = (deal.id || "").toLowerCase();
   const name = (deal.name || "").toLowerCase();
@@ -269,6 +315,10 @@ function brandZoom(deal: Deal): number {
   return 1.08;
 }
 
+/**
+ * Circular brand avatar used on each stop.
+ * Falls back to a letter if we don't have a logo for that brand.
+ */
 function BrandAvatar({
   deal,
   dim = false,
@@ -314,6 +364,10 @@ function BrandAvatar({
   );
 }
 
+/**
+ * Timeline rail node.
+ * Different variants visually show: start, next up, claimed, skipped, etc.
+ */
 function RailNode({ variant }: { variant: "start" | "next" | "claimed" | "skipped" | "normal" }) {
   const base = "relative mt-1 h-4 w-4 rounded-full";
   const core = "absolute inset-0 rounded-full border";
@@ -366,6 +420,10 @@ function RailNode({ variant }: { variant: "start" | "next" | "claimed" | "skippe
   );
 }
 
+/**
+ * Shows your brand lockup at the top.
+ * This tries multiple filenames so you can swap assets without changing code.
+ */
 function BrandLockup() {
   const candidates = [
     "/brands/lockup.png",
@@ -388,37 +446,50 @@ function BrandLockup() {
         alt="BirthdayScout"
         className="block h-[300px] sm:h-[360px] w-auto select-none drop-shadow-[0_28px_70px_rgba(0,0,0,0.70)]"
         draggable={false}
-        onError={() => setIdx((v) => v + 1)}
+        onError={() => setIdx((v) => v + 1)} // If one asset doesn't exist, try the next one
       />
     </div>
   );
 }
 
 export default function PlanPage() {
+  // Core plan state (stored in localStorage)
   const [planIds, setPlanIds] = useState<string[]>([]);
   const [claimedIds, setClaimedIds] = useState<string[]>([]);
   const [zip, setZip] = useState<string>("");
 
+  // Destination is optional but influences the optimized ordering (destination is forced last)
   const [destinationId, setDestinationId] = useState<string>("");
-  // NOTE: if you don't use this in UI, keep it but avoid lint warnings by prefixing underscore
+
+  // NOTE: If you don't use this in UI, keep it but prefix underscore to avoid lint warnings
   const [_promptOff, setPromptOff] = useState<boolean>(false);
 
+  // Whether we have GPS coordinates stored for start (vs ZIP-based start)
   const [hasGPSStart, setHasGPSStart] = useState<boolean>(false);
 
+  // Cached route stats from the last time we optimized (nice UX so we can show summary instantly)
   const [lastOptimizedAt, setLastOptimizedAt] = useState<number | null>(null);
   const [lastRouteDistanceM, setLastRouteDistanceM] = useState<number | null>(null);
   const [lastRouteDurationS, setLastRouteDurationS] = useState<number | null>(null);
   const [lastRouteOrder, setLastRouteOrder] = useState<string[]>([]);
 
+  // "Skip today" support
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [autoOpenMaps, setAutoOpenMaps] = useState<boolean>(false);
 
+  // User-facing messages
   const [error, setError] = useState<string>("");
   const [status, setStatus] = useState<string>("");
 
+  // Busy flags for buttons
   const [optimizing, setOptimizing] = useState<boolean>(false);
   const [shareBusy, setShareBusy] = useState<boolean>(false);
 
+  /**
+   * Initial load:
+   * Pull all persisted state from localStorage,
+   * then attempt to hydrate ZIP from Supabase profile (if logged in).
+   */
   useEffect(() => {
     const p = readStringArray(PLAN_KEY);
     const c = readStringArray(CLAIMED_KEY);
@@ -436,6 +507,7 @@ export default function PlanPage() {
     setSkippedIds(readStringArray(SKIPPED_KEY));
     setAutoOpenMaps(readBool(AUTO_ADVANCE_OPEN_KEY));
 
+    // Detect if GPS start is already stored
     try {
       const raw = localStorage.getItem(START_KEY);
       if (raw) {
@@ -444,6 +516,7 @@ export default function PlanPage() {
       }
     } catch {}
 
+    // ZIP comes from DB if possible; otherwise we fall back to localStorage
     (async () => {
       const dbZip = await fetchZipFromDB();
       if (dbZip) {
@@ -457,6 +530,9 @@ export default function PlanPage() {
     })();
   }, []);
 
+  /**
+   * Listen for profile updates so ZIP changes on other pages reflect here instantly.
+   */
   useEffect(() => {
     async function refresh() {
       const dbZip = await fetchZipFromDB();
@@ -476,10 +552,15 @@ export default function PlanPage() {
     return () => window.removeEventListener(PROFILE_UPDATED_EVENT, onProfileUpdated);
   }, []);
 
+  /** Builds a map query for a stop. Kept as a function in case you expand logic later. */
   function buildStopQuery(name: string): string {
     return (name || "").trim();
   }
 
+  /**
+   * Safety: if destination is set but that deal is no longer in the plan,
+   * clear it so we don't route to a non-existent stop.
+   */
   useEffect(() => {
     if (!destinationId) return;
     if (!planIds.includes(destinationId)) {
@@ -488,6 +569,10 @@ export default function PlanPage() {
     }
   }, [planIds, destinationId]);
 
+  /**
+   * If the plan changes, ensure skippedIds doesn't contain IDs that no longer exist.
+   * This avoids weird UI states.
+   */
   useEffect(() => {
     if (skippedIds.length === 0) return;
     const planSet = new Set(planIds);
@@ -498,15 +583,21 @@ export default function PlanPage() {
     }
   }, [planIds, skippedIds]);
 
+  /**
+   * Convert planIds → real Deal objects (from ALL_DEALS).
+   * useMemo keeps this from rebuilding on every render.
+   */
   const items: Deal[] = useMemo(() => {
     const byId = new Map<string, Deal>();
     for (const d of ALL_DEALS as Deal[]) byId.set(d.id, d);
     return planIds.map((id) => byId.get(id)).filter(Boolean) as Deal[];
   }, [planIds]);
 
+  // Sets are faster for membership checks and cleaner in the UI logic
   const skippedSet = useMemo(() => new Set(skippedIds), [skippedIds]);
   const claimedSet = useMemo(() => new Set(claimedIds), [claimedIds]);
 
+  /** Active items = planned items minus "skipped today" */
   const activeItems: Deal[] = useMemo(() => {
     if (items.length === 0) return [];
     return items.filter((d) => !skippedSet.has(d.id));
@@ -514,15 +605,18 @@ export default function PlanPage() {
 
   const hasAnyPlanned = items.length > 0;
 
+  /** Claimed count only for items still in the plan */
   const claimedCount = useMemo(() => {
     const set = new Set(claimedIds);
     return planIds.filter((id) => set.has(id)).length;
   }, [planIds, claimedIds]);
 
+  // Progress bar values
   const pct = planIds.length ? Math.round((claimedCount / planIds.length) * 100) : 0;
   const progressPct = Math.min(100, Math.max(0, pct));
   const glowT = progressPct / 100;
 
+  // Fancy progress bar glow
   const progShadow = `0 0 ${12 + 34 * glowT}px rgba(16,185,129,${0.14 + 0.38 * glowT}),
                     0 0 ${5 + 16 * glowT}px rgba(16,185,129,${0.24 + 0.52 * glowT})`;
 
@@ -532,10 +626,19 @@ export default function PlanPage() {
   rgba(167,243,208,${0.58 + 0.30 * glowT}) 100%
 )`;
 
+  /** Notify other parts of the app that the plan changed */
   function dispatchPlanUpdated() {
     window.dispatchEvent(new Event(PLAN_UPDATED_EVENT));
   }
 
+  /**
+   * Save ZIP:
+   * - normalizes input
+   * - switches start mode to ZIP
+   * - clears GPS start
+   * - clears optimization caches (because start changed)
+   * - saves to Supabase profile if logged in
+   */
   function saveZip(next: string) {
     const z = normalizeZip(next);
     setZip(z);
@@ -543,10 +646,12 @@ export default function PlanPage() {
     try {
       localStorage.setItem(ZIP_KEY, z);
 
+      // If user typed a ZIP, we treat that as the new start mode
       localStorage.setItem(START_MODE_KEY, "zip");
       localStorage.removeItem(START_KEY);
       setHasGPSStart(false);
 
+      // New ZIP means any previously resolved coordinates might be "wrong context"
       localStorage.removeItem(RESOLVED_KEY);
       localStorage.removeItem(LAST_ROUTE_ORDER);
       localStorage.removeItem(LAST_OPT_KEY);
@@ -559,6 +664,7 @@ export default function PlanPage() {
       setLastRouteDurationS(null);
     } catch {}
 
+    // Save to DB in the background (best-effort)
     (async () => {
       try {
         await saveZipToDB(z);
@@ -567,6 +673,10 @@ export default function PlanPage() {
     })();
   }
 
+  /**
+   * Request GPS start location and store it.
+   * If it fails, we fall back to ZIP mode.
+   */
   async function useMyLocation() {
     setError("");
     setStatus("");
@@ -588,6 +698,7 @@ export default function PlanPage() {
         setError("");
       },
       (err) => {
+        // If we can't get location, clean up and fall back to ZIP mode
         try {
           localStorage.removeItem(START_KEY);
           localStorage.setItem(START_MODE_KEY, "zip");
@@ -601,6 +712,10 @@ export default function PlanPage() {
     );
   }
 
+  /**
+   * Toggle "skip today" for a stop.
+   * If the user skips the destination, we clear the destination automatically.
+   */
   function toggleSkipped(id: string) {
     const set = new Set(skippedIds);
     if (set.has(id)) set.delete(id);
@@ -623,6 +738,10 @@ export default function PlanPage() {
     setStatus("Cleared skipped stops.");
   }
 
+  /**
+   * Remove a deal from the plan entirely.
+   * Also removes it from claimed and skipped if present, and clears cached route order.
+   */
   function removeFromPlan(id: string) {
     setError("");
     setStatus("");
@@ -654,11 +773,16 @@ export default function PlanPage() {
     dispatchPlanUpdated();
   }
 
+  /** Opens one stop in Maps (uses mapQuery override if present) */
   function openStopInMaps(d: Deal) {
     const q = buildStopQuery((d.mapQuery || d.name) ?? d.name);
     openPlaceInMaps(q);
   }
 
+  /**
+   * Finds the "next" unclaimed, unskipped stop.
+   * If we have an optimized route, we use that ordering; otherwise we use activeItems order.
+   */
   function computeNextStop(prospectiveClaimed: Set<string>, routeSummary: Deal[] | null): Deal | null {
     const candidates = routeSummary && routeSummary.length ? routeSummary : activeItems;
     for (const d of candidates) {
@@ -667,6 +791,10 @@ export default function PlanPage() {
     return null;
   }
 
+  /**
+   * Build a route summary from lastRouteOrder.
+   * We also filter out skipped stops so the UI reflects “today’s route.”
+   */
   const routeSummary = useMemo(() => {
     if (!lastRouteOrder || lastRouteOrder.length === 0) return null;
 
@@ -682,6 +810,10 @@ export default function PlanPage() {
     return orderedDeals;
   }, [lastRouteOrder, skippedSet]);
 
+  /**
+   * Toggle claimed state for a stop.
+   * If newly claimed, celebrate + suggest the next stop.
+   */
   function toggleClaim(id: string) {
     const set = new Set(claimedIds);
     const wasClaimed = set.has(id);
@@ -706,6 +838,10 @@ export default function PlanPage() {
     writeStringArray(CLAIMED_KEY, []);
   }
 
+  /**
+   * Clears everything: plan, claimed, destination, skipped, and cached optimization data.
+   * Essentially a full reset of the planner.
+   */
   function clearPlan() {
     setPlanIds([]);
     setClaimedIds([]);
@@ -728,11 +864,13 @@ export default function PlanPage() {
     setSkippedIds([]);
     localStorage.removeItem(SKIPPED_KEY);
 
+    // Clears cached exact lat/lon that OpenRouteButton uses
     localStorage.removeItem(RESOLVED_KEY);
 
     dispatchPlanUpdated();
   }
 
+  /** Marks a stop as the destination (final stop) */
   function setAsDestination(id: string) {
     setDestinationId(id);
     localStorage.setItem(DEST_KEY, id);
@@ -746,7 +884,11 @@ export default function PlanPage() {
     setStatus("Destination cleared.");
   }
 
-  // ✅ THIS WAS MISSING IN YOUR FILE
+  /**
+   * Builds the "start" payload for the optimize API.
+   * - Geo mode: send exact coords if we have them
+   * - Zip mode: send startQuery as the ZIP
+   */
   function getStartPayload(): { startCoords?: { lat: number; lon: number }; startQuery?: string } | null {
     const mode = localStorage.getItem(START_MODE_KEY) === "zip" ? "zip" : "geo";
 
@@ -768,6 +910,12 @@ export default function PlanPage() {
     return null;
   }
 
+  /**
+   * Calls /api/optimize-route and then updates:
+   * - plan order (so the UI reflects optimized order)
+   * - route summary cache (distance/time/order)
+   * - resolved lat/lon cache (for OpenRouteButton to open exact locations)
+   */
   async function doOptimize(destOverride?: string) {
     const start = getStartPayload();
     if (!start) {
@@ -785,10 +933,12 @@ export default function PlanPage() {
       query: buildStopQuery(d.mapQuery || d.name),
     }));
 
+    // Decide destination: explicit override > saved destination > none
     const destToSend =
       (destOverride && planIds.includes(destOverride) ? destOverride : "") ||
       (destinationId && planIds.includes(destinationId) ? destinationId : undefined);
 
+    // If destination is skipped, ignore it (destination must be a real active stop)
     const safeDestToSend = destToSend && skippedSet.has(destToSend) ? undefined : destToSend;
 
     setOptimizing(true);
@@ -809,7 +959,7 @@ export default function PlanPage() {
       setStatus(data.note || "Optimized ✅");
       tryConfetti();
 
-      // cache resolved coords (OpenRouteButton reads this)
+      // Cache resolved coords so OpenRouteButton can open exact lat/lon in Maps
       if (Array.isArray(data.resolvedStops)) {
         const map: Record<string, { lat: number; lon: number }> = {};
         for (const s of data.resolvedStops) {
@@ -820,6 +970,7 @@ export default function PlanPage() {
         localStorage.setItem(RESOLVED_KEY, JSON.stringify(map));
       }
 
+      // Sync destination if API decided one (or confirmed one)
       if (data.destinationId && data.destinationId !== destinationId) {
         setDestinationId(data.destinationId);
         localStorage.setItem(DEST_KEY, data.destinationId);
@@ -827,7 +978,7 @@ export default function PlanPage() {
 
       const orderedIds = data.orderedIds;
 
-      // ✅ Apply optimized order ONCE
+      // Apply optimized order to plan (preserves any unknown IDs by appending them)
       setPlanIds((prev) => {
         const orderedSet = new Set(orderedIds);
         const rest = prev.filter((id) => !orderedSet.has(id));
@@ -838,9 +989,11 @@ export default function PlanPage() {
         return finalOrder;
       });
 
+      // Cache the optimized ordering for the "Showing optimized order" view
       setLastRouteOrder(orderedIds);
       writeStringArray(LAST_ROUTE_ORDER, orderedIds);
 
+      // Cache timestamp + stats so summary can show instantly next time
       const ts = Date.now();
       setLastOptimizedAt(ts);
       writeNum(LAST_OPT_KEY, ts);
@@ -861,6 +1014,7 @@ export default function PlanPage() {
     }
   }
 
+  /** Public optimize handler for the button */
   async function optimizeRoute() {
     setError("");
     setStatus("");
@@ -871,6 +1025,10 @@ export default function PlanPage() {
     await doOptimize();
   }
 
+  /**
+   * Human-readable route line (duration + distance).
+   * This is shown in the summary and the bottom dock.
+   */
   const routeLine = useMemo(() => {
     if (!lastRouteDurationS && !lastRouteDistanceM) return null;
 
@@ -880,6 +1038,7 @@ export default function PlanPage() {
     return parts.join(" • ");
   }, [lastRouteDurationS, lastRouteDistanceM]);
 
+  /** Finds the next actionable stop (not claimed, not skipped) */
   const nextStop: Deal | null = useMemo(() => {
     const candidates = routeSummary && routeSummary.length ? routeSummary : activeItems;
     for (const d of candidates) {
@@ -893,6 +1052,10 @@ export default function PlanPage() {
     openStopInMaps(nextStop);
   }
 
+  /**
+   * Creates a shareable route summary and copies it to clipboard.
+   * We keep it text-only so it works everywhere (messages, notes, etc.)
+   */
   async function shareRoute() {
     setError("");
     setStatus("");
@@ -929,16 +1092,25 @@ export default function PlanPage() {
     }
   }
 
+  /**
+   * Auto-advance setting:
+   * This is stored so it survives refreshes.
+   */
   function toggleAutoOpenMaps(v: boolean) {
     setAutoOpenMaps(v);
     writeBool(AUTO_ADVANCE_OPEN_KEY, v);
     setStatus(v ? "Auto-advance: will open Maps after claiming." : "Auto-advance: will NOT open Maps automatically.");
   }
 
+  // Summary labels
   const startLabel = hasGPSStart ? "Current location" : zip?.trim() ? `ZIP ${zip.trim()}` : "Not set";
   const destinationName =
     destinationId && items.some((d) => d.id === destinationId) ? items.find((d) => d.id === destinationId)?.name : "";
 
+  /**
+   * OpenRouteButton expects an orderedDeals list (lite shape).
+   * We prefer optimized order if available; otherwise activeItems.
+   */
   const mapOrderedDeals = (routeSummary && routeSummary.length ? routeSummary : activeItems).map((d) => ({
     id: d.id,
     name: d.name,
@@ -946,6 +1118,7 @@ export default function PlanPage() {
   }));
 
   // ======= aesthetics =======
+  // Keeping these as constants makes the JSX easier to read.
   const NARROW = "mx-auto w-full max-w-[1200px]";
 
   const GlassSection =
@@ -988,7 +1161,7 @@ export default function PlanPage() {
 
   return (
     <main className="relative min-h-screen overflow-x-hidden text-white">
-      {/* BACKGROUND */}
+      {/* BACKGROUND: starfield image */}
       <div className="pointer-events-none fixed inset-0 z-0">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -1004,7 +1177,7 @@ export default function PlanPage() {
         />
       </div>
 
-      {/* OVERLAYS */}
+      {/* OVERLAYS: darken + vignette + film grain */}
       <div className="pointer-events-none fixed inset-0 z-10">
         <div className="absolute inset-0 bg-black/10" />
         <div className="absolute inset-0 bg-[radial-gradient(1100px_760px_at_50%_18%,rgba(0,0,0,0.00)_0%,rgba(0,0,0,0.12)_55%,rgba(0,0,0,0.34)_100%)]" />
@@ -1021,10 +1194,12 @@ export default function PlanPage() {
       <div className="relative z-20 px-6 pt-0 pb-[190px]">
         <div className="h-[72px]" />
         <div className={NARROW}>
+          {/* ===== Header ===== */}
           <header className="mb-8">
             <BrandLockup />
             <div className="pl-10 lg:pl-30 -mt-24">
               <div className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-black/35 px-3 py-1 text-xs text-zinc-300">
+                {/* Dot turns on once start is set */}
                 <IconDot on={hasGPSStart || !!zip.trim()} />
                 Trip builder
               </div>
@@ -1038,6 +1213,7 @@ export default function PlanPage() {
             </div>
           </header>
 
+          {/* ===== Top 2-column layout: Summary + Next Stop ===== */}
           <div className="grid gap-6 lg:gap-8 lg:grid-cols-2 items-start max-w-[980px] mx-auto">
             <section className={`${GlassCard} p-7 lg:p-8 lg:translate-y-10`}>
               <div className="text-[12px] uppercase tracking-wider text-zinc-500">Summary</div>
@@ -1069,6 +1245,7 @@ export default function PlanPage() {
                 {lastOptimizedAt ? <Pill>Optimized {formatWhen(lastOptimizedAt)}</Pill> : <Pill>Not optimized</Pill>}
               </div>
 
+              {/* Progress bar */}
               <div className="mt-5 relative h-2.5 w-full max-w-[520px] rounded-full bg-white/8 overflow-hidden">
                 <div
                   className="absolute inset-y-0 left-0 rounded-full blur-lg"
@@ -1099,6 +1276,7 @@ export default function PlanPage() {
             </section>
 
             <section className="flex flex-col gap-4 lg:-translate-y-34 lg:pl-2">
+              {/* Next-stop card logic: empty state, next stop, or "all done" */}
               {!hasAnyPlanned ? (
                 <div className={`${GlassCard} ${NextRimGlow} p-6 lg:p-8 w-full`}>
                   <div className="text-[12px] uppercase tracking-wider text-zinc-400">Get started</div>
@@ -1153,6 +1331,7 @@ export default function PlanPage() {
                 )
               ) : null}
 
+              {/* Quick utility button */}
               {hasAnyPlanned ? (
                 <div className="flex justify-end w-full">
                   <button
@@ -1166,6 +1345,7 @@ export default function PlanPage() {
             </section>
           </div>
 
+          {/* Status + error banners */}
           {status ? (
             <div className="mt-5 rounded-2xl border border-white/12 bg-black/35 p-4 text-sm text-zinc-200">
               {status}
@@ -1178,6 +1358,7 @@ export default function PlanPage() {
             </div>
           ) : null}
 
+          {/* ===== Main body: empty state vs stops timeline ===== */}
           {items.length === 0 ? (
             <section className={`${GlassSection} mt-7 p-10 text-center text-zinc-300`}>
               Add deals from the Deals page to start planning your birthday run 🎉
@@ -1210,9 +1391,11 @@ export default function PlanPage() {
               </div>
 
               <div className="relative px-5 py-5">
+                {/* Timeline rail behind the list */}
                 <div className="pointer-events-none absolute left-[30px] top-6 bottom-6 w-[6px] -translate-x-1/2 bg-emerald-200/10 blur-[6px]" />
                 <div className="pointer-events-none absolute left-[30px] top-6 bottom-6 w-px bg-emerald-200/22" />
 
+                {/* Start card at the top of the timeline */}
                 <div className="mb-5 flex items-start gap-4">
                   <div className="relative w-10 flex justify-center -translate-x-2.5">
                     <RailNode variant="start" />
@@ -1227,6 +1410,7 @@ export default function PlanPage() {
                           {hasGPSStart ? "Current location (GPS)" : zip?.trim() ? `ZIP ${zip.trim()}` : "Not set"}
                         </div>
 
+                        {/* Start controls: ZIP input + GPS button */}
                         <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
                           <input
                             value={zip}
@@ -1242,6 +1426,7 @@ export default function PlanPage() {
                           </button>
                         </div>
 
+                        {/* Auto-open maps preference */}
                         <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
                           <input
                             type="checkbox"
@@ -1255,6 +1440,7 @@ export default function PlanPage() {
                   </div>
                 </div>
 
+                {/* Stops timeline */}
                 <div className="space-y-4">
                   {items.map((d, idx) => {
                     const isClaimed = claimedSet.has(d.id);
@@ -1294,6 +1480,7 @@ export default function PlanPage() {
                           >
                             <div className="flex items-start justify-between gap-4">
                               <div className="min-w-0">
+                                {/* Stop header row */}
                                 <div className="flex flex-wrap items-center gap-2">
                                   <span className="text-[11px] text-zinc-500">Stop {idx + 1}</span>
                                   {statusPill}
@@ -1301,6 +1488,7 @@ export default function PlanPage() {
                                   {isNext ? <Pill tone="good">Up next</Pill> : null}
                                 </div>
 
+                                {/* Stop content */}
                                 <div className="mt-3 flex items-center gap-3">
                                   <BrandAvatar deal={d} dim={isClaimed || isSkipped} size={40} />
                                   <div className="min-w-0">
@@ -1310,6 +1498,7 @@ export default function PlanPage() {
                                   </div>
                                 </div>
 
+                                {/* Stop actions */}
                                 <div className="mt-4 flex flex-wrap gap-2">
                                   <button
                                     onClick={() => toggleClaim(d.id)}
@@ -1325,6 +1514,7 @@ export default function PlanPage() {
                                     {isSkipped ? "Unskip" : "Skip today"}
                                   </button>
 
+                                  {/* Destination controls */}
                                   {!isDest ? (
                                     <button
                                       onClick={() => setAsDestination(d.id)}
@@ -1349,6 +1539,7 @@ export default function PlanPage() {
                                 </div>
                               </div>
 
+                              {/* Quick map open button */}
                               <button
                                 onClick={() => openStopInMaps(d)}
                                 className="shrink-0 rounded-full border border-white/12 bg-black/35 px-4 py-2 text-sm hover:bg-white/5"
@@ -1365,6 +1556,7 @@ export default function PlanPage() {
                 </div>
               </div>
 
+              {/* Manage section */}
               <div className="px-5 pb-5">
                 <div className={`${GlassCard} p-4`}>
                   <div className="text-[11px] uppercase tracking-wider text-zinc-500">Manage</div>
@@ -1387,11 +1579,12 @@ export default function PlanPage() {
         </div>
       </div>
 
+      {/* Bottom dock (only shows if there are planned items) */}
       {hasAnyPlanned ? (
         <div className="fixed inset-x-0 bottom-0 z-50 pointer-events-none">
           <div
             className="mx-auto w-full max-w-[560px] px-5"
-            style={{ paddingBottom: "calc(18px + env(safe-area-inset-bottom))" }}
+            style={{ paddingBottom: "calc(18px + env(safe-area-inset-bottom))" }} // iOS safe-area padding
           >
             <div className="pointer-events-auto relative rounded-[22px] border border-white/12 bg-black/50 backdrop-blur-md shadow-[0_30px_120px_rgba(0,0,0,0.70)] px-4 py-3">
               <div className="flex items-center justify-between gap-3">
@@ -1407,8 +1600,10 @@ export default function PlanPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {/* Opens full route in Maps using resolved lat/lon when available */}
                   <OpenRouteButton orderedDeals={mapOrderedDeals} full />
 
+                  {/* Calls optimize API */}
                   <button
                     onClick={optimizeRoute}
                     disabled={optimizing || shareBusy}
@@ -1420,6 +1615,7 @@ export default function PlanPage() {
                     {optimizing ? "Optimizing..." : "Optimize"}
                   </button>
 
+                  {/* Copies a text summary of the route */}
                   <button
                     onClick={shareRoute}
                     disabled={optimizing || shareBusy}
