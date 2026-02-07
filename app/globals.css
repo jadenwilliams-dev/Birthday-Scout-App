@@ -1,32 +1,17 @@
-/* Import Tailwind’s base styles and utilities */
 @import "tailwindcss";
 
-/* --------------------------------------------------
-   Global CSS variables
-   Used as the foundation for light/dark theming
--------------------------------------------------- */
 :root {
   --background: #ffffff;
   --foreground: #171717;
 }
 
-/* --------------------------------------------------
-   Tailwind theme bindings
-   Exposes our CSS variables to Tailwind utilities
--------------------------------------------------- */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-
-  /* Fonts injected elsewhere (layout / font loader) */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-/* --------------------------------------------------
-   Dark mode overrides
-   Automatically applied based on user OS preference
--------------------------------------------------- */
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
@@ -34,27 +19,21 @@
   }
 }
 
-/* --------------------------------------------------
-   Base body styling
-   Keeps defaults predictable across the app
--------------------------------------------------- */
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
-  position: relative; /* Needed for pseudo-element layering */
+  position: relative;
 }
 
 /* --------------------------------------------------
    Subtle BirthdayScout background accents
-   Adds a premium glow without distracting from content
+   (premium glow, not loud)
 -------------------------------------------------- */
 body::before {
   content: "";
   position: fixed;
-  inset: -30%; /* Oversized so gradients fade naturally at edges */
-
-  /* Soft, layered radial glows for depth */
+  inset: -30%;
   background:
     radial-gradient(
       600px 600px at 15% 10%,
@@ -71,7 +50,6 @@ body::before {
       rgba(34, 211, 238, 0.06),
       transparent 60%
     );
-
-  z-index: -1;          /* Always behind app content */
-  pointer-events: none; /* Never interfere with clicks or scrolling */
+  z-index: -1;
+  pointer-events: none;
 }
