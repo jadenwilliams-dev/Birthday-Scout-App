@@ -9,13 +9,11 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
-
 # -----------------------------
 # Env (Python owns secrets)
 # -----------------------------
 ORS_KEY = os.getenv("ORS_API_KEY")
 GOOGLE_PLACES_KEY = os.getenv("GOOGLE_PLACES_API_KEY")
-
 
 # -----------------------------
 # Shared helpers
@@ -44,20 +42,24 @@ def is_zip(s: str) -> bool:
     s = s.strip()
     if len(s) == 5 and s.isdigit():
         return True
-    # ZIP+4
     if len(s) == 10 and s[:5].isdigit() and s[5] == "-" and s[6:].isdigit():
         return True
     return False
 
 
-async def fetch_json(url: str, method: str = "GET", headers: Optional[Dict[str, str]] = None, json_body: Any = None, timeout_s: float = 9.0):
+async def fetch_json(
+    url: str,
+    method: str = "GET",
+    headers: Optional[Dict[str, str]] = None,
+    json_body: Any = None,
+    timeout_s: float = 9.0,
+):
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         if method == "GET":
             r = await client.get(url, headers=headers)
         else:
             r = await client.post(url, headers=headers, json=json_body)
     return r
-
 
 # -----------------------------
 # "Old" optimizer (keep it!)
@@ -139,7 +141,6 @@ def optimize(req: OptimizeRequest):
 
     return OptimizeResponse(ordered_ids=ordered_ids, improved=improved, total_cost=total)
 
-
 # -----------------------------
 # BirthdayScout real-world API
 # -----------------------------
@@ -173,7 +174,8 @@ PLACES_TTL_S = 24 * 60 * 60
 
 
 def places_cache_key(name: str, start: Geo) -> str:
-    return f"{name}:{start.lat:.2f},{start.lon:.2f}"
+    # ✅ higher precision to avoid collisions / weird “same bucket” behavior
+    return f"{name}:{start.lat:.5f},{start.lon:.5f}"
 
 
 async def ors_geocode_search(query: str, start: Geo, radius_m: int, size: int):
@@ -353,7 +355,7 @@ async def places_nearest_by_name(start: Geo, name: str) -> Geo:
             return Geo(lat=float(lat), lon=float(lon))
         return None
 
-    # 1) rankby=distance (best)
+    # 1) rankby=distance
     params1 = {
         "key": GOOGLE_PLACES_KEY,
         "location": f"{start.lat},{start.lon}",
@@ -372,7 +374,7 @@ async def places_nearest_by_name(start: Geo, name: str) -> Geo:
         _places_cache[key] = (time.time(), got1)
         return got1
 
-    # 2) radius fallback
+    # 2) radius fallback + deterministic sort by haversine
     params2 = {
         "key": GOOGLE_PLACES_KEY,
         "location": f"{start.lat},{start.lon}",
@@ -391,10 +393,15 @@ async def places_nearest_by_name(start: Geo, name: str) -> Geo:
         status = str(d2.get("status", "unknown"))
         raise HTTPException(status_code=404, detail=f'Places returned no strict match for "{name}" (status={status})')
 
-    good2.sort(key=lambda r: haversine_meters(start, Geo(
-        lat=float(((r.get("geometry") or {}).get("location") or {}).get("lat", 0.0)),
-        lon=float(((r.get("geometry") or {}).get("location") or {}).get("lng", 0.0)),
-    )))
+    good2.sort(
+        key=lambda r: haversine_meters(
+            start,
+            Geo(
+                lat=float(((r.get("geometry") or {}).get("location") or {}).get("lat", 0.0)),
+                lon=float(((r.get("geometry") or {}).get("location") or {}).get("lng", 0.0)),
+            ),
+        )
+    )
 
     got2 = pick_first(good2)
     if not got2:
@@ -442,29 +449,34 @@ async def optimize_route(req: OptimizeRouteRequest):
     else:
         raise HTTPException(status_code=400, detail="Missing start (coords or zip)")
 
-    # resolve stops
+    # resolve stops (always deterministic given the same start + queries, as much as APIs allow)
     resolved_base = []
     for s in stops_in:
         geo, picked = await resolve_stop_geo(s.query, start)
         dist_m = haversine_meters(start, geo)
-        resolved_base.append({
-            "id": s.id,
-            "query": s.query,
-            "pickedFrom": picked,
-            "geo": geo,
-            "dist_mi": meters_to_miles(dist_m),
-        })
+        resolved_base.append(
+            {
+                "id": s.id,
+                "query": s.query,
+                "pickedFrom": picked,
+                "geo": geo,
+                "dist_mi": meters_to_miles(dist_m),
+            }
+        )
 
-    # matrix for driving ETA/dist
+    # matrix for driving ETA/dist (INFO ONLY — never affects destination choice)
+    matrix_used = False
+    matrix_error = None
     driving_meters = None
     driving_seconds = None
     try:
         distances, durations = await ors_matrix_from_start(start, [x["geo"] for x in resolved_base])
         driving_meters = [float(x) if isinstance(x, (int, float)) else float("nan") for x in distances]
         driving_seconds = [float(x) if isinstance(x, (int, float)) else float("nan") for x in durations]
-    except:
-        driving_meters = None
-        driving_seconds = None
+        matrix_used = True
+    except Exception as e:
+        matrix_used = False
+        matrix_error = str(e)
 
     resolved = []
     for i, s in enumerate(resolved_base):
@@ -474,19 +486,20 @@ async def optimize_route(req: OptimizeRouteRequest):
         drive_mi = meters_to_miles(m) if isinstance(m, (int, float)) and math.isfinite(m) else None
         eta_min = max(1, int(round(sec / 60))) if isinstance(sec, (int, float)) and math.isfinite(sec) else None
 
-        resolved.append({
-            **{k: v for k, v in s.items() if k != "geo"},
-            "geo": s["geo"],
-            "drive_mi": drive_mi,
-            "eta_min": eta_min,
-        })
+        resolved.append(
+            {
+                **{k: v for k, v in s.items() if k != "geo"},
+                "geo": s["geo"],
+                "drive_mi": drive_mi,
+                "eta_min": eta_min,
+            }
+        )
 
-    # suggested destination = farthest
+    # ✅ suggested destination = farthest (DETERMINISTIC)
+    # Always use straight-line dist so it cannot flip depending on whether matrix succeeded.
     suggested = resolved[0]
-    for s in resolved:
-        a = s["drive_mi"] if isinstance(s["drive_mi"], (int, float)) else s["dist_mi"]
-        b = suggested["drive_mi"] if isinstance(suggested["drive_mi"], (int, float)) else suggested["dist_mi"]
-        if a > b:
+    for s in resolved[1:]:
+        if s["dist_mi"] > suggested["dist_mi"]:
             suggested = s
 
     # previewOnly
@@ -496,10 +509,15 @@ async def optimize_route(req: OptimizeRouteRequest):
             "optimized": False,
             "startUsed": {"lat": start.lat, "lon": start.lon, "source": start_source},
             "suggestedDestinationId": suggested["id"],
+            "debug": {
+                "matrixUsed": matrix_used,
+                "matrixError": matrix_error,
+                "destinationChoice": "farthest_by_haversine",
+            },
             "stops": [
                 {
                     "id": s["id"],
-                    "dist_mi": s["drive_mi"] if isinstance(s["drive_mi"], (int, float)) else s["dist_mi"],
+                    "dist_mi": s["dist_mi"],
                     "eta_min": s["eta_min"],
                     "lat": s["geo"].lat,
                     "lon": s["geo"].lon,
@@ -513,7 +531,13 @@ async def optimize_route(req: OptimizeRouteRequest):
     # destination logic
     requested = (req.destinationId or "").strip()
     dest_exists = requested and any(s["id"] == requested for s in resolved)
-    destination_id = requested if dest_exists else suggested["id"]
+
+    if dest_exists:
+        destination_id = requested
+        destination_choice = "client_provided"
+    else:
+        destination_id = suggested["id"]
+        destination_choice = "farthest_by_haversine"
 
     jobs_list = [s for s in resolved if s["id"] != destination_id]
     int_to_id: Dict[int, str] = {}
@@ -568,6 +592,11 @@ async def optimize_route(req: OptimizeRouteRequest):
         "routeDistance_m": route_distance_m,
         "routeDuration_s": route_duration_s,
         "startUsed": {"lat": start.lat, "lon": start.lon, "source": start_source},
+        "debug": {
+            "matrixUsed": matrix_used,
+            "matrixError": matrix_error,
+            "destinationChoice": destination_choice,
+        },
         "resolvedStops": [
             {"id": s["id"], "lat": s["geo"].lat, "lon": s["geo"].lon, "pickedFrom": s["pickedFrom"]}
             for s in resolved
